@@ -1,0 +1,14 @@
+# 真实凭据——绝对不允许入库
+.machine-tokens/
+*_token.txt
+.pypirc
+
+# 本地部署/测试产物
+.deployed/
+*.bak-*
+
+# 编辑器/系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

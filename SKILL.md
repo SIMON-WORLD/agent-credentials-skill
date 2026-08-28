@@ -1,0 +1,91 @@
+---
+name: machine-tokens
+description: 本机 GitHub / PyPI 等发布令牌与连接方法（Windows）。任何需要 git push、gh 操作、PR 合并、GitHub Release、PyPI 发布（twine）的任务，开始前必须先读本技能；遇到 401 Unauthorized、认证失败、无权限、推送被拒绝、gh auth status 报 "The token in default is invalid" 或 "Failed to log in"、keyring 不可用时，直接按本技能注入本机令牌文件，不要执行交互式 gh auth login，不要反复尝试其它登录方式。
+---
+
+# Machine Tokens（本机发布凭据）
+
+本技能管理本机所有 Codex 会话通用的发布凭据（GitHub / PyPI 等）。令牌存放在用户私有目录 `.machine-tokens`，按供应商一个文件：
+
+- GitHub: `$env:USERPROFILE\.machine-tokens\github_token.txt`（账号：`<github-account>`，全部仓库、含 workflow 权限）
+- PyPI: `$env:USERPROFILE\.machine-tokens\pypi_token.txt`（发布项目）
+
+> 非 Windows 平台目录为 `~/.machine-tokens/`，把命令里的 `$env:USERPROFILE` 换成 `$HOME`。
+
+## 使用时机（必读）
+
+- 任何涉及 GitHub / PyPI 的操作（git push、gh 系列命令、PR、Release、twine 发布）开始前，先读本技能。
+- `gh auth status` 报 `The token in default is invalid` 或 `Failed to log in`，表示 gh 自身保存的凭据不可用，不是“未登录”；不要执行交互式 `gh auth login`，不要反复测试其它认证方式。
+- Codex 沙箱通常读不到系统钥匙串（keyring），因此**沙箱内所有 gh/git 操作一律先注入本机令牌**（见下），再用 `gh auth status` / push 验证。
+- 涉及 GitHub 操作时，优先用注入方式；仅在真实终端需要修复 gh 登录态时才重新注册。
+
+安全规则：
+
+- 不要在回复里打印令牌明文，不要提交到仓库。
+- 只读文件内容用于构造命令，不要复制到聊天正文。
+- 令牌文件只放在用户私有目录（`.machine-tokens`），不要放进项目目录或同步盘。
+
+## 通用模式（注入 → 校验 → 刷新）
+
+1. **注入**：把对应令牌读入环境变量，后续 `gh` / `twine` 命令直接可用。
+2. **校验**：运行 `scripts/check.ps1`（本技能随附），确认令牌有效与到期时间。
+3. **刷新**：真实终端凭据失效时，运行 `scripts/refresh.ps1` 重新注册（GitHub 重注册 gh；PyPI 生成 `.pypirc`）。
+
+## GitHub
+
+注入令牌：
+
+```powershell
+$env:GH_TOKEN = (Get-Content -Raw -LiteralPath "$env:USERPROFILE\.machine-tokens\github_token.txt").Trim()
+```
+
+之后 `gh auth status`、`gh api`、`gh pr`、`gh release` 等直接可用。若 gh 报缓存/权限错误：
+
+```powershell
+$env:XDG_CACHE_HOME = '<当前任务目录>\04_tmp\gh-cache'
+```
+
+git push（Codex 沙箱读不到 keyring 时）：
+
+```powershell
+$token = (Get-Content -Raw -LiteralPath "$env:USERPROFILE\.machine-tokens\github_token.txt").Trim()
+$basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$token"))
+$env:GIT_TERMINAL_PROMPT = '0'
+$env:GH_TOKEN = $token
+git -c credential.helper= -c credential.https://github.com.helper= -c http.sslBackend=openssl -c http.sslVerify=false -c http.version=HTTP/1.1 -c "http.extraHeader=Authorization: Basic $basic" push origin main
+```
+
+- 若报 `detected dubious ownership`，在同一条命令中加 `-c safe.directory='<仓库绝对路径>'`。
+- 网络偶发 EOF 属于临时抖动，重试即可。
+
+gh 登录态失效时（真实终端，重新注册，先备份）：
+
+```powershell
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+Copy-Item "$env:APPDATA\GitHub CLI\hosts.yml" "$env:APPDATA\GitHub CLI\hosts.yml.bak-$stamp" -Force
+$token = (Get-Content -Raw -LiteralPath "$env:USERPROFILE\.machine-tokens\github_token.txt").Trim()
+$token | gh auth login --with-token -h github.com -p https
+gh auth setup-git
+gh auth status
+```
+
+## PyPI
+
+twine 发布前注入（推荐，避免明文落盘）：
+
+```powershell
+$env:TWINE_USERNAME = '__token__'
+$env:TWINE_PASSWORD = (Get-Content -Raw -LiteralPath "$env:USERPROFILE\.machine-tokens\pypi_token.txt").Trim()
+twine upload dist/*
+```
+
+或运行 `scripts/refresh.ps1 -Provider pypi -Force` 生成 `%USERPROFILE%\.pypirc`（`[pypi] username = __token__`，密码读令牌文件，先备份）。PyPI 令牌以 `pypi-` 开头，内含到期时间，可用 `scripts/check.ps1` 解码查看到期日。
+
+## 扩展新供应商
+
+新供应商（npm、Hugging Face、Docker Hub 等）按 `docs/providers.md` 五步法扩展：令牌文件命名 → 注入命令 → 校验 API → 刷新命令 → 示例。
+
+## 排查提示
+
+- 401/403：确认令牌文件存在、未过期；GitHub 需要 repo + workflow 权限，PyPI 需要 upload 权限。
+- 其他会话无需用户提示：遇到上述场景应先读本技能并按本技能处理，而不是走 gh auth login 交互流程。

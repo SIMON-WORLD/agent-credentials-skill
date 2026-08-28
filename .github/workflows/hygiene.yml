@@ -1,0 +1,34 @@
+name: hygiene
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Forbid real token patterns and machine-specific paths
+        run: |
+          set -euo pipefail
+          patterns=(
+            'gho_[A-Za-z0-9]{20,}'
+            'pypi-Ag[A-Za-z0-9]{10,}'
+            'C:[\\/]Users[\\/]Administrator'
+          )
+          for p in "${patterns[@]}"; do
+            if rg -n --hidden -g '!.git/**' "$p" .; then
+              echo "::error::forbidden pattern matched: $p"
+              exit 1
+            fi
+          done
+
+      - name: Forbid credential files
+        run: |
+          set -euo pipefail
+          if find . -path ./.git -prune -o \( -name '*_token.txt' -o -name '.pypirc' \) -print | grep -q .; then
+            echo "::error::credential file committed"
+            exit 1
+          fi
