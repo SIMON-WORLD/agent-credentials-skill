@@ -332,3 +332,238 @@ function Get-AgentCredentialGitHubAuthProbe {
         observations = $observations
     }
 }
+<#
+.SYNOPSIS
+  Internal DNS resolution probe for the GitHub transport adapter.
+.DESCRIPTION
+  Read-only hostname resolution. Returns only a success boolean; resolved addresses
+  are never returned or exposed. Tests may override this function in the harness
+  scope for deterministic scenarios.
+#>
+function Invoke-AgentCredentialDnsProbe {
+    [CmdletBinding()]
+    param([string]$Hostname)
+
+    try {
+        $null = [System.Net.Dns]::GetHostAddresses($Hostname)
+        return [pscustomobject]@{ succeeded = $true }
+    } catch {
+        return [pscustomobject]@{ succeeded = $false }
+    }
+}
+
+<#
+.SYNOPSIS
+  Internal HTTPS transport probe for the GitHub transport adapter.
+.DESCRIPTION
+  Read-only, unauthenticated HTTPS GET to the provider endpoint with a short timeout.
+  Returns only a normalized transport result (reachable / timeout / tls / proxy / failure)
+  plus an optional HTTP status code. Response bodies, headers, exception text, and
+  credentials are never returned. TLS verification is never disabled.
+#>
+function Invoke-AgentCredentialHttpProbe {
+    [CmdletBinding()]
+    param(
+        [string]$Uri,
+        [int]$TimeoutSeconds = 8
+    )
+
+    $proxyEnvPresent = (Test-Path 'Env:HTTPS_PROXY') -or (Test-Path 'Env:HTTP_PROXY')
+    try {
+        $cmd = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
+        $useSkipHttpError = $null -ne $cmd -and $cmd.Parameters.ContainsKey('SkipHttpErrorCheck')
+        $params = @{
+            Uri = $Uri
+            Method = 'Get'
+            TimeoutSec = $TimeoutSeconds
+            UseBasicParsing = $true
+        }
+        if ($useSkipHttpError) { $params.SkipHttpErrorCheck = $true }
+        $resp = Invoke-WebRequest @params
+        return [pscustomobject]@{
+            transport = 'reachable'
+            statusCode = [int]$resp.StatusCode
+            proxyEvidence = $proxyEnvPresent
+        }
+    } catch {
+        $ex = $_.Exception
+        # Any HTTP response, including 4xx, proves transport reachability.
+        if ($ex -is [System.Net.WebException]) {
+            if ($null -ne $ex.Response) {
+                return [pscustomobject]@{
+                    transport = 'reachable'
+                    statusCode = [int]$ex.Response.StatusCode
+                    proxyEvidence = $proxyEnvPresent
+                }
+            }
+        }
+        $isTimeout = $false
+        $isTls = $false
+        if ($ex -is [System.Net.WebException] -and $ex.Status -eq [System.Net.WebExceptionStatus]::Timeout) { $isTimeout = $true }
+        if ($null -ne $ex.InnerException -and $ex.InnerException -is [System.Security.Authentication.AuthenticationException]) { $isTls = $true }
+        $msg = [string]$ex.Message
+        if ($msg -match 'timed out|timeout') { $isTimeout = $true }
+        if ($isTimeout) { return [pscustomobject]@{ transport = 'timeout'; statusCode = $null; proxyEvidence = $proxyEnvPresent } }
+        if ($isTls) { return [pscustomobject]@{ transport = 'tls'; statusCode = $null; proxyEvidence = $proxyEnvPresent } }
+        $proxyHint = $proxyEnvPresent -and ($msg -match 'proxy|407')
+        if ($proxyHint) { return [pscustomobject]@{ transport = 'proxy'; statusCode = $null; proxyEvidence = $proxyEnvPresent } }
+        return [pscustomobject]@{ transport = 'failure'; statusCode = $null; proxyEvidence = $proxyEnvPresent }
+    }
+}
+
+<#
+.SYNOPSIS
+  GitHub provider reference adapter — NETWORK / TRANSPORT PROBING ONLY (v0.2).
+.DESCRIPTION
+  Read-only, unauthenticated transport probe: DNS resolution plus a small HTTPS request
+  to the provider API endpoint. Answers whether this execution context can resolve and
+  reach the endpoint over the expected transport. It never determines credential
+  validity, never reads credential values, never adds credential headers, and never
+  produces a final Diagnosis Result. gh auth status remains evidence, not verdict.
+.PARAMETER Runtime
+  Execution-context kind: host, sandbox, container, remote, ci, unknown.
+.PARAMETER RuntimeIdentifier
+  Optional safe runtime identifier supplied by the caller.
+.PARAMETER Platform
+  Optional generic platform identifier supplied by the caller.
+.PARAMETER Isolation
+  Optional isolation information supplied by the caller.
+.PARAMETER Hostname
+  Optional safe hostname. Defaults to github.com (probes https://api.github.com).
+  Enterprise hostnames probe https://<hostname>/api/v3. Only safe hostnames are
+  accepted; arbitrary URL schemes are rejected and never executed.
+.PARAMETER TimeoutSeconds
+  Short diagnostic timeout for the HTTPS probe (default 8).
+.EXAMPLE
+  Get-AgentCredentialGitHubTransportProbe -Runtime sandbox
+#>
+function Get-AgentCredentialGitHubTransportProbe {
+    [CmdletBinding()]
+    param(
+        [ValidateSet('host', 'sandbox', 'container', 'remote', 'ci', 'unknown')]
+        [string]$Runtime = 'unknown',
+        [string]$RuntimeIdentifier = $null,
+        [string]$Platform = $null,
+        [string]$Isolation = $null,
+        [string]$Hostname = 'github.com',
+        [int]$TimeoutSeconds = 8
+    )
+
+    $observations = New-Object System.Collections.Generic.List[object]
+
+    if ($Hostname -notmatch '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$') {
+        $observations.Add([pscustomobject]@{
+            probeType = 'network'
+            check = 'github-transport'
+            outcome = 'failure'
+            code = $null
+            reference = 'host/invalid'
+            source = $null
+            metadata = [pscustomobject]@{ note = 'unsafe hostname rejected; no probe attempted' }
+        })
+        return [pscustomobject]@{
+            provider = 'github'
+            operation = 'transport-probe'
+            executionContext = [pscustomobject]@{ runtime = $Runtime; runtimeIdentifier = $RuntimeIdentifier; platform = $Platform; isolation = $Isolation }
+            observations = $observations
+        }
+    }
+
+    $endpoint = if ($Hostname -ieq 'github.com') { 'https://api.github.com' } else { 'https://' + $Hostname + '/api/v3' }
+
+    # --- DNS resolution (read-only; resolved addresses are never exposed) ---
+    $dns = Invoke-AgentCredentialDnsProbe -Hostname $Hostname
+    if (-not $dns.succeeded) {
+        $observations.Add([pscustomobject]@{
+            probeType = 'network'
+            check = 'github-dns-resolution'
+            outcome = 'failure'
+            code = 'DNS_FAILURE'
+            reference = ('host/' + $Hostname)
+            source = $null
+            metadata = [pscustomobject]@{ note = 'dns resolution failed; https probe not attempted' }
+        })
+        return [pscustomobject]@{
+            provider = 'github'
+            operation = 'transport-probe'
+            executionContext = [pscustomobject]@{ runtime = $Runtime; runtimeIdentifier = $RuntimeIdentifier; platform = $Platform; isolation = $Isolation }
+            observations = $observations
+        }
+    }
+    $observations.Add([pscustomobject]@{
+        probeType = 'network'
+        check = 'github-dns-resolution'
+        outcome = 'success'
+        code = $null
+        reference = ('host/' + $Hostname)
+        source = $null
+        metadata = $null
+    })
+
+    # --- HTTPS transport (unauthenticated; any HTTP response proves reachability) ---
+    $http = Invoke-AgentCredentialHttpProbe -Uri $endpoint -TimeoutSeconds $TimeoutSeconds
+    switch ($http.transport) {
+        'reachable' {
+            $observations.Add([pscustomobject]@{
+                probeType = 'network'
+                check = 'github-https-transport'
+                outcome = 'success'
+                code = $null
+                reference = ('endpoint/' + $Hostname)
+                source = $null
+                metadata = [pscustomobject]@{ statusCode = $http.statusCode }
+            })
+        }
+        'timeout' {
+            $observations.Add([pscustomobject]@{
+                probeType = 'network'
+                check = 'github-https-transport'
+                outcome = 'timeout'
+                code = $null
+                reference = ('endpoint/' + $Hostname)
+                source = $null
+                metadata = [pscustomobject]@{ note = 'generic transport timeout currently has no dedicated diagnosis code in v0.2' }
+            })
+        }
+        'tls' {
+            $observations.Add([pscustomobject]@{
+                probeType = 'network'
+                check = 'github-https-transport'
+                outcome = 'failure'
+                code = $null
+                reference = ('endpoint/' + $Hostname)
+                source = $null
+                metadata = [pscustomobject]@{ note = 'tls transport failure; no matching taxonomy code' }
+            })
+        }
+        'proxy' {
+            $observations.Add([pscustomobject]@{
+                probeType = 'network'
+                check = 'github-https-transport'
+                outcome = 'failure'
+                code = 'PROXY_MISCONFIGURED'
+                reference = ('endpoint/' + $Hostname)
+                source = $null
+                metadata = [pscustomobject]@{ note = 'proxy-related transport failure' }
+            })
+        }
+        default {
+            $observations.Add([pscustomobject]@{
+                probeType = 'network'
+                check = 'github-https-transport'
+                outcome = 'failure'
+                code = $null
+                reference = ('endpoint/' + $Hostname)
+                source = $null
+                metadata = [pscustomobject]@{ note = 'generic transport failure; no matching taxonomy code' }
+            })
+        }
+    }
+
+    [pscustomobject]@{
+        provider = 'github'
+        operation = 'transport-probe'
+        executionContext = [pscustomobject]@{ runtime = $Runtime; runtimeIdentifier = $RuntimeIdentifier; platform = $Platform; isolation = $Isolation }
+        observations = $observations
+    }
+}
