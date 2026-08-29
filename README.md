@@ -153,6 +153,49 @@ v0.3 在 v0.2 诊断之上新增「引用 → Profile → Context」选择层，
 - v0.3 **不是秘密保险库**：不加密、不托管、不轮换原始令牌。
 - 当前架构/版本：**v0.3.0**；v0.1 / v0.2 行为保持向后兼容。
 
+## v0.4 — Credential Broker（当前版本 v0.4.0）
+
+完整生命周期：`Discover → Diagnose → Resolve Context → Build Execution Plan → Execute Scoped → Verify → Recover`。
+
+分层边界：
+
+- **v0.2 Diagnosis Result**：回答「凭据怎么了 / 凭据能力是否健康」，不执行恢复。
+- **v0.3 Credential Context**：回答「应使用哪个已授权的逻辑凭据上下文」。
+- **v0.4 Credential Broker**：回答「执行是否被允许」；当显式请求时，通过进程作用域边界委托执行。
+
+v0.4 公共模型（Credential ExecutionPlan，`schema/credential-plan.schema.json`，contractVersion=0.4.0）：
+
+- gate 状态恰为 `ready | blocked | needs_decision`。
+- 凭据按逻辑引用、永不按值。
+- `needs_decision` 不可执行；歧义 fail-closed。
+- `INTERACTIVE_AUTH` / `reauthRequired` 绝不自动触发认证。
+
+Broker CLI（`scripts/broker.ps1`）：
+
+- **默认（无 `-Execute`）**：仅计划——`诊断摘要 → 绑定/上下文 → ExecutionPlan → 人类可读或 `-Json` 输出`；不做 raw 凭据查找、不启动子进程。
+- **显式 `-Execute`**：使用本次调用构建的确切 ExecutionPlan；要求调用方提供可执行文件、逻辑引用 resolver、目标环境变量名等；仅当 gate 真正为 `ready` 才执行；委托给进程作用域执行；父/全局认证状态不变。
+
+示例（参数名与实现一致）：
+
+```powershell
+# 仅计划
+.\scripts\broker.ps1 -Provider github -Operation push -DiagnosisJson '{"status":"healthy"}' -ReferencesJson '[{"provider":"github","sourceType":"cli","reference":"cli/github.com/alice","account":"alice","profile":"personal","host":"github.com"}]'
+# 机器可读计划
+.\scripts\broker.ps1 -Provider github -Operation push -DiagnosisJson '{"status":"healthy"}' -ReferencesJson '[{"provider":"github","sourceType":"cli","reference":"cli/github.com/alice","account":"alice","profile":"personal","host":"github.com"}]' -Json
+# 显式执行（仅当计划 ready；resolver 由调用方提供并只收到逻辑引用）
+.\scripts\broker.ps1 -Provider github -Operation push -DiagnosisJson '{"status":"healthy"}' -ReferencesJson '[{"provider":"github","sourceType":"cli","reference":"cli/github.com/alice","account":"alice","profile":"personal","host":"github.com"}]' -Execute -Executable 'git' -EnvironmentVariable 'GH_TOKEN' -CredentialResolver { param($r) <返回原始值> }
+```
+
+安全模型：
+
+- Broker **不是秘密保险库**；不持久化/缓存 raw 凭据。
+- raw 凭据解析仅发生在执行边界，经调用方提供的 resolver。
+- raw 凭据绝不出现在 ExecutionPlan 或 Broker 结果中。
+- 无默认 `gh auth switch` / `login`、`npm login` 或全局凭据变更。
+- `blocked` / `needs_decision` 路径不解析 raw 凭据、不启动子进程。
+
+> 当前架构/版本：**v0.4.0**（Credential Broker / ExecutionPlan）；v0.1 / v0.2 / v0.3 行为保持向后兼容。（v0.3.0 历史 tag/Release 仍指向 main=7ff474f。）
+
 ## License
 
 MIT，见 [LICENSE](LICENSE)。

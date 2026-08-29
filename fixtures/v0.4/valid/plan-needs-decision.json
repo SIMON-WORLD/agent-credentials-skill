@@ -1,0 +1,22 @@
+{
+  "contractVersion": "0.4.0",
+  "provider": "example-provider",
+  "operation": "publish",
+  "diagnosis": {
+    "status": "healthy",
+    "code": null,
+    "summary": "valid credential, ambiguous context"
+  },
+  "context": {
+    "outcome": "ambiguous",
+    "selectedReference": null
+  },
+  "gate": "needs_decision",
+  "decisionCode": "MANUAL_REVIEW",
+  "selectedCredentialReference": null,
+  "executionMetadata": {
+    "runtime": "host",
+    "host": "example.com",
+    "note": "needs decision"
+  }
+}

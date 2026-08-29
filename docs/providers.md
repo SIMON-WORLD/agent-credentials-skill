@@ -43,3 +43,12 @@
 - **通用 context resolver 保持 provider 中立**：`scripts/core/context.ps1` 的 `Resolve-AgentCredentialContext` 与 `scripts/core/binding.ps1` 的 `Resolve-AgentCredentialProjectProfile` 不含任何 provider 分支，GitHub / npm 走同一套逻辑。
 - **适配器绝不按数组顺序选择**：排序只用于报告；选择权归通用 resolver，歧义必须 fail-closed。
 - **适配器不拥有原始秘密存储**：不读原始值、不写凭据文件、不做 login/logout/config 变更；原始值只在执行层进程作用域内短暂存在。
+
+## v0.4 Broker 适配器边界与版本说明（当前版本 v0.4.0）
+
+- **GitHub / npm 适配器把提供商特定观察转成逻辑引用**；**provider 特化分支止于适配层**。
+- **Core 的 plan / 执行门禁保持 provider 中立**：`scripts/core/plan.ps1`（`New-AgentCredentialExecutionPlan` / `Get-AgentCredentialBrokerGate`）与 `scripts/core/broker-execution.ps1`（`Invoke-AgentCredentialExecutionPlan`）不含 GitHub/npm 分支。
+- **`active` 仍不是选择权威**；选择权在通用 resolver（v0.3 语义延续）。
+- **适配器不拥有执行期的 raw 秘密解析**：raw 值只经调用方 resolver 在进程作用域执行边界内瞬时存在。
+
+> 当前架构/版本：**v0.4.0**（Credential Broker / ExecutionPlan）；v0.1 / v0.2 / v0.3 行为保持向后兼容。（v0.3.0 历史 tag/Release 仍指向 main=7ff474f。）

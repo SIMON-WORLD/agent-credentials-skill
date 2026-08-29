@@ -137,3 +137,32 @@ Agent 必须遵守的规则：
 - `scripts/context.ps1` 只解析/选择上下文；真正执行注入用 `scripts/core/execution.ps1`（参考进程作用域边界）。
 - v0.3 不是秘密保险库；原始凭据解析是调用方/执行层责任。
 - v0.1 `.machine-tokens` 文件注入、v0.2 doctor 诊断层全部保持向后兼容。
+
+## v0.4 Credential Broker（当前版本 v0.4.0）
+
+Agent 必须遵守的规则：
+
+1. **执行前总是先构建/检查计划**（build & inspect plan before execution）。
+2. **绝不执行非 ready 计划**。
+3. **绝不把 blocked / needs_decision 重新解释为 ready**。
+4. **计划中的确切所选逻辑引用就是执行权威**。
+5. **计划创建后不做第二次凭据选择**。
+6. **raw 凭据 resolver 回调是执行边界的责任**（Broker 只传逻辑引用）。
+7. **默认仅计划（plan-only）**；`-Execute` 是显式 opt-in。
+8. **无自动重认证 / 恢复**；`INTERACTIVE_AUTH`/`reauthRequired` 只是决策标记，不触发认证。
+9. **保持 v0.1 / v0.2 / v0.3 兼容语义**。
+
+Broker 用法（`scripts/broker.ps1`）：
+
+```powershell
+# 仅计划（默认）
+.\scripts\broker.ps1 -Provider github -Operation push -DiagnosisJson '{"status":"healthy"}' -ReferencesJson '[...]'
+# 机器可读
+.\scripts\broker.ps1 -Provider github -Operation push -DiagnosisJson '{"status":"healthy"}' -ReferencesJson '[...]' -Json
+# 显式执行（仅 ready；resolver 调用方提供）
+.\scripts\broker.ps1 -Provider github -Operation push -DiagnosisJson '{"status":"healthy"}' -ReferencesJson '[...]' -Execute -Executable 'git' -EnvironmentVariable 'GH_TOKEN' -CredentialResolver { param($r) <原始值> }
+```
+
+- Broker 不持久化/缓存/解析 raw 凭据；raw 值仅瞬时存在于执行边界子进程作用域。
+- 无默认 `gh auth switch` / `login`、`npm login` 或全局认证变更。
+- 当前架构/版本：**v0.4.0**（Credential Broker / ExecutionPlan）；v0.1 / v0.2 / v0.3 行为保持向后兼容。

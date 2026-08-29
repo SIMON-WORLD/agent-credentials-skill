@@ -1,0 +1,36 @@
+{
+  "contractVersion": "0.4.0",
+  "provider": "example-provider",
+  "operation": "publish",
+  "diagnosis": {
+    "status": "healthy",
+    "code": null,
+    "summary": "credential valid"
+  },
+  "context": {
+    "outcome": "selected",
+    "selectedReference": {
+      "provider": "example-provider",
+      "sourceType": "env",
+      "reference": "env/EXAMPLE_TOKEN",
+      "account": "alice@example.com",
+      "profile": "personal",
+      "host": "example.com"
+    }
+  },
+  "gate": "ready",
+  "decisionCode": null,
+  "selectedCredentialReference": {
+    "provider": "example-provider",
+    "sourceType": "env",
+    "reference": "env/EXAMPLE_TOKEN",
+    "account": "alice@example.com",
+    "profile": "personal",
+    "host": "example.com"
+  },
+  "executionMetadata": {
+    "runtime": "host",
+    "host": "example.com",
+    "note": "ready plan"
+  }
+}
