@@ -52,6 +52,7 @@ function ConvertTo-AgentCredentialPublicEvidence {
         'source' = 'credential-source'
         'tool' = 'command'
         'host' = 'context'
+        'config' = 'context'
     }
     $out = New-Object System.Collections.Generic.List[object]
     foreach ($obs in @($Observations)) {
