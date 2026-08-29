@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "0.2.0",
+  "provider": "example-provider",
+  "operation": "api",
+  "executionContext": {
+    "runtime": "host",
+    "runtimeIdentifier": "example-runtime",
+    "platform": null,
+    "isolation": null
+  },
+  "status": "inconclusive",
+  "capabilities": [],
+  "availableCredentialSources": [
+    { "type": "environment", "reference": "env/PROVIDER_TOKEN", "available": true }
+  ],
+  "selectedCredentialSource": null,
+  "identity": null,
+  "network": { "reachable": null, "dns": true, "proxy": null, "timeout": true, "tls": null },
+  "diagnosis": {
+    "code": "AUTH_CHECK_TIMEOUT",
+    "category": "diagnostic",
+    "conclusive": false,
+    "summary": "Validation probe timed out; the result is inconclusive and must not be read as credential invalidity."
+  },
+  "recommendedResolution": {
+    "strategy": "RETRY_AUTH_CHECK",
+    "steps": ["retry the validation probe with a bounded time budget", "re-diagnose"],
+    "actionRequired": false
+  },
+  "reauthRequired": false,
+  "evidence": [
+    { "probeType": "provider-api", "check": "provider.verify", "outcome": "timeout", "code": "AUTH_CHECK_TIMEOUT", "summary": "Validation probe timed out; outcome inconclusive" }
+  ]
+}

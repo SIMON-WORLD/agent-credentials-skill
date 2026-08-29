@@ -1,0 +1,373 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-credentials:diagnosis-result:schema:0.2.0",
+  "title": "Credential Diagnosis Result",
+  "contractVersion": "0.2.0",
+  "description": "Provider-neutral, runtime-neutral diagnosis result of the Agent Credential Layer. Status, capabilities, failure cause, and recommended resolution are separate semantic layers. The contract never carries credential values; credential sources appear only as metadata and references.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "provider",
+    "operation",
+    "executionContext",
+    "status",
+    "capabilities",
+    "availableCredentialSources",
+    "selectedCredentialSource",
+    "identity",
+    "network",
+    "diagnosis",
+    "recommendedResolution",
+    "reauthRequired",
+    "evidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": "0.2.0",
+      "description": "Public contract version."
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Provider identifier handled by an adapter (for example github, pypi, npm). The schema itself depends on no specific provider."
+    },
+    "operation": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Operation being diagnosed (for example push, api, release, publish, auth-check)."
+    },
+    "executionContext": {
+      "type": "object",
+      "required": ["runtime"],
+      "additionalProperties": false,
+      "description": "Describes the execution context itself: what kind of context this is and, when safely known, its runtime, platform, and isolation. Probe observations (keyring accessibility, environment propagation, network reachability, tool availability) belong in network, capabilities, credential-source metadata, or evidence, not here.",
+      "properties": {
+        "runtime": {
+          "enum": ["host", "sandbox", "container", "remote", "ci", "unknown"],
+          "description": "Kind of execution context, if known; unknown is always permitted."
+        },
+        "runtimeIdentifier": {
+          "type": ["string", "null"],
+          "description": "Safe runtime identifier, if known (for example codex-sandbox). Optional; never required."
+        },
+        "platform": {
+          "type": ["string", "null"],
+          "description": "Generic platform identifier, if safely known (for example linux, darwin, windows). Optional; never required."
+        },
+        "isolation": {
+          "type": ["string", "null"],
+          "description": "Isolation information, if safely known (for example sandbox, container, none, unknown). Optional; never required."
+        }
+      }
+    },
+    "status": {
+      "enum": ["healthy", "degraded", "unavailable", "inconclusive"],
+      "description": "Overall diagnostic outcome. healthy: the requested credential capability is usable in the current execution context. degraded: a usable path exists, but a preferred or default path is unavailable or impaired. unavailable: no currently usable path was established. inconclusive: the system cannot safely determine availability. Failure causes belong in diagnosis, not in this field."
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "enum": ["CONNECTOR_AVAILABLE"] },
+      "description": "Observed non-error capabilities or states. Kept strictly separate from diagnosis failure codes."
+    },
+    "availableCredentialSources": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/credentialSource" },
+      "description": "Credential sources discovered in this context, by metadata and reference only."
+    },
+    "selectedCredentialSource": {
+      "anyOf": [
+        { "$ref": "#/$defs/credentialSource" },
+        { "type": "null" }
+      ],
+      "description": "The source chosen by resolution, identified by metadata and reference only. Null when no source is selected."
+    },
+    "identity": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "account": { "type": ["string", "null"] },
+        "host": { "type": ["string", "null"] },
+        "profile": { "type": ["string", "null"] }
+      },
+      "description": "Safe provider identity information. Never contains credential values."
+    },
+    "network": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "reachable": { "type": ["boolean", "null"] },
+        "dns": { "type": ["boolean", "null"] },
+        "proxy": { "type": ["boolean", "null"] },
+        "timeout": { "type": ["boolean", "null"] },
+        "tls": { "type": ["boolean", "null"] }
+      },
+      "description": "Generic network observations; not specific to any provider."
+    },
+    "diagnosis": {
+      "type": "object",
+      "required": ["code", "summary"],
+      "additionalProperties": false,
+      "description": "Failure diagnosis. code is the single authoritative primary diagnosis; relatedCodes are optional secondary diagnoses with explicit related semantics and must not duplicate the primary code.",
+      "properties": {
+        "code": {
+          "anyOf": [
+            { "enum": [
+              "CREDENTIAL_NOT_FOUND",
+              "CREDENTIAL_INVALID",
+              "CREDENTIAL_SOURCE_UNAVAILABLE",
+              "SANDBOX_KEYRING_UNAVAILABLE",
+              "ENV_NOT_PROPAGATED",
+              "NETWORK_BLOCKED",
+              "DNS_FAILURE",
+              "PROXY_MISCONFIGURED",
+              "TOOL_NOT_INSTALLED",
+              "TOOL_EXECUTION_UNAVAILABLE",
+              "WRONG_ACCOUNT",
+              "WRONG_HOST",
+              "WRONG_PROFILE",
+              "TOKEN_SCOPE_INSUFFICIENT",
+              "AUTH_CHECK_TIMEOUT",
+              "DIAGNOSIS_INCONCLUSIVE"
+            ] },
+            { "type": "null" }
+          ],
+          "description": "Primary diagnosis: the single authoritative failure cause. Null when no failure was identified."
+        },
+        "relatedCodes": {
+          "type": "array",
+          "items": { "enum": [
+            "CREDENTIAL_NOT_FOUND",
+            "CREDENTIAL_INVALID",
+            "CREDENTIAL_SOURCE_UNAVAILABLE",
+            "SANDBOX_KEYRING_UNAVAILABLE",
+            "ENV_NOT_PROPAGATED",
+            "NETWORK_BLOCKED",
+            "DNS_FAILURE",
+            "PROXY_MISCONFIGURED",
+            "TOOL_NOT_INSTALLED",
+            "TOOL_EXECUTION_UNAVAILABLE",
+            "WRONG_ACCOUNT",
+            "WRONG_HOST",
+            "WRONG_PROFILE",
+            "TOKEN_SCOPE_INSUFFICIENT",
+            "AUTH_CHECK_TIMEOUT",
+            "DIAGNOSIS_INCONCLUSIVE"
+          ] },
+          "description": "Optional secondary diagnoses with explicit related/secondary semantics. Must not duplicate the primary code; duplication is invalid by contract (enforced in consistency validation)."
+        },
+        "category": {
+          "enum": ["credential", "execution-context", "network", "tool", "account", "scope", "diagnostic"],
+          "description": "Coarse category derived from the primary diagnosis code namespace."
+        },
+        "conclusive": {
+          "type": "boolean",
+          "description": "True when the diagnosis is conclusive; false or absent when uncertain."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Optional confidence in the classification, 0 to 1."
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-safe summary. Must never contain credential values."
+        },
+        "details": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional safe detail strings; sanitized by construction."
+        }
+      }
+    },
+    "recommendedResolution": {
+      "type": "object",
+      "required": ["strategy"],
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "enum": [
+            "USE_CONNECTOR",
+            "USE_EXISTING_CLI_AUTH",
+            "USE_PROCESS_SCOPED_ENV",
+            "USE_PROTECTED_FILE",
+            "USE_EXTERNAL_BROKER",
+            "SELECT_ACCOUNT",
+            "SELECT_PROFILE",
+            "CORRECT_HOST",
+            "FIX_NETWORK",
+            "FIX_DNS",
+            "FIX_PROXY",
+            "INSTALL_TOOL",
+            "RETRY_AUTH_CHECK",
+            "REFRESH_CREDENTIAL",
+            "REQUEST_ADDITIONAL_SCOPE",
+            "INTERACTIVE_AUTH",
+            "MANUAL_REVIEW",
+            "NO_ACTION"
+          ],
+          "description": "Stable resolution strategy code. Interactive authentication is one strategy among many; it is never an automatic consequence of a single failure code."
+        },
+        "steps": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Reference-based steps; never credential values."
+        },
+        "actionRequired": {
+          "type": "boolean",
+          "description": "True when a human or external action is required to complete the resolution."
+        }
+      }
+    },
+    "reauthRequired": {
+      "type": "boolean",
+      "description": "Policy result computed from the full diagnosis. Never implied by any single diagnostic code; interactive authentication is only reachable after non-interactive recovery is exhausted."
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["probeType", "outcome", "check"],
+        "additionalProperties": false,
+        "description": "Structured, sanitized observation. Evidence is sanitized by construction; adapters must not dump command streams into this contract. Provider-specific safe metadata is allowed only in the metadata extension point and carries the same no-credential-value invariant.",
+        "properties": {
+          "probeType": {
+            "enum": [
+              "context",
+              "command",
+              "network",
+              "credential-source",
+              "identity",
+              "provider-api"
+            ]
+          },
+          "check": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Probe identifier, for example execution-context.keyring or network.endpoint."
+          },
+          "outcome": {
+            "enum": ["success", "failure", "unavailable", "timeout", "skipped", "unknown"],
+            "description": "Bounded machine-readable outcome of the probe."
+          },
+          "code": {
+            "anyOf": [
+              { "enum": [
+                "CREDENTIAL_NOT_FOUND",
+                "CREDENTIAL_INVALID",
+                "CREDENTIAL_SOURCE_UNAVAILABLE",
+                "SANDBOX_KEYRING_UNAVAILABLE",
+                "ENV_NOT_PROPAGATED",
+                "NETWORK_BLOCKED",
+                "DNS_FAILURE",
+                "PROXY_MISCONFIGURED",
+                "TOOL_NOT_INSTALLED",
+                "TOOL_EXECUTION_UNAVAILABLE",
+                "WRONG_ACCOUNT",
+                "WRONG_HOST",
+                "WRONG_PROFILE",
+                "TOKEN_SCOPE_INSUFFICIENT",
+                "AUTH_CHECK_TIMEOUT",
+                "DIAGNOSIS_INCONCLUSIVE"
+              ] },
+              { "type": "null" }
+            ],
+            "description": "Failure or state code associated with this observation; null when none applies."
+          },
+          "summary": {
+            "type": "string",
+            "description": "Optional sanitized human-readable summary. Must never contain credential values."
+          },
+          "reference": {
+            "type": ["string", "null"],
+            "description": "Optional safe metadata or reference associated with the probe; never a credential value."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Optional probe timestamp."
+          },
+          "durationMs": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Optional probe duration in milliseconds."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Explicit safe extension point for provider-specific evidence metadata. Must never carry credential values or command dumps."
+          }
+        }
+      },
+      "description": "Structured, sanitized observations supporting the diagnosis."
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Explicit extension point for provider-specific safe metadata. Must never carry credential values."
+    }
+  },
+  "$defs": {
+    "credentialSource": {
+      "type": "object",
+      "required": ["type", "reference"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": ["environment", "cliKeyring", "platformConnector", "protectedFile", "externalBroker", "interactive"]
+        },
+        "reference": {
+          "type": ["string", "null"],
+          "description": "Safe reference only; never a value. Examples: env:CREDENTIAL_NAME, keyring:host, connector:connector-id, file:/absolute/path, broker:name/key. Null when no reference applies (for example interactive)."
+        },
+        "available": {
+          "type": "boolean",
+          "description": "Whether the source is available in this execution context."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schemaVersion": "0.2.0",
+      "provider": "github",
+      "operation": "push",
+      "status": "degraded",
+      "executionContext": {
+        "runtime": "sandbox",
+        "runtimeIdentifier": "codex-sandbox",
+        "platform": "windows",
+        "isolation": "sandbox"
+      },
+      "availableCredentialSources": [
+        { "type": "environment", "reference": "env:CREDENTIAL_NAME", "available": true },
+        { "type": "protectedFile", "reference": "file:/home/user/.credential-store/github", "available": true }
+      ],
+      "selectedCredentialSource": { "type": "protectedFile", "reference": "file:/home/user/.credential-store/github" },
+      "capabilities": [],
+      "identity": null,
+      "network": { "reachable": true, "dns": true, "proxy": true, "timeout": false, "tls": true },
+      "diagnosis": {
+        "code": "SANDBOX_KEYRING_UNAVAILABLE",
+        "relatedCodes": ["CREDENTIAL_SOURCE_UNAVAILABLE"],
+        "category": "execution-context",
+        "conclusive": true,
+        "confidence": 0.9,
+        "summary": "Keyring is not readable in this sandbox; a protected file source is available."
+      },
+      "recommendedResolution": {
+        "strategy": "USE_PROCESS_SCOPED_ENV",
+        "steps": ["inject credential reference into the child process", "verify", "execute operation"],
+        "actionRequired": false
+      },
+      "reauthRequired": false,
+      "evidence": [
+        { "probeType": "context", "check": "execution-context.keyring", "outcome": "unavailable", "code": "SANDBOX_KEYRING_UNAVAILABLE", "summary": "Keyring backend not accessible from sandbox" },
+        { "probeType": "network", "check": "network.endpoint", "outcome": "success", "code": null, "summary": "Endpoint reachable" },
+        { "probeType": "credential-source", "check": "source.protectedFile", "outcome": "success", "code": null, "summary": "Protected file exists with restricted access" }
+      ]
+    }
+  ]
+}

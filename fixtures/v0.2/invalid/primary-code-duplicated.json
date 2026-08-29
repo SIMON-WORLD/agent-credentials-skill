@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "0.2.0",
+  "provider": "example-provider",
+  "operation": "push",
+  "executionContext": { "runtime": "host" },
+  "status": "unavailable",
+  "capabilities": [],
+  "availableCredentialSources": [],
+  "selectedCredentialSource": null,
+  "identity": null,
+  "network": { "reachable": false, "dns": true, "proxy": null, "timeout": false, "tls": null },
+  "diagnosis": {
+    "code": "NETWORK_BLOCKED",
+    "relatedCodes": ["NETWORK_BLOCKED"],
+    "category": "network",
+    "conclusive": true,
+    "summary": "Endpoint unreachable; primary code intentionally duplicated in relatedCodes."
+  },
+  "recommendedResolution": { "strategy": "FIX_NETWORK" },
+  "reauthRequired": false,
+  "evidence": [
+    { "probeType": "network", "check": "network.endpoint", "outcome": "failure", "code": "NETWORK_BLOCKED", "summary": "Endpoint unreachable" }
+  ]
+}
