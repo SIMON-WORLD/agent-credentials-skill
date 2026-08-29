@@ -89,3 +89,19 @@ twine upload dist/*
 
 - 401/403：确认令牌文件存在、未过期；GitHub 需要 repo + workflow 权限，PyPI 需要 upload 权限。
 - 其他会话无需用户提示：遇到上述场景应先读本技能并按本技能处理，而不是走 gh auth login 交互流程。
+## v0.2 Diagnosis（诊断先行）
+
+**核心规则：Never re-authenticate before diagnosis.**
+
+遇到认证失败时，先运行诊断而不是立即重新登录：
+
+```powershell
+# 仓库内（agent-credentials-skill）运行诊断 CLI
+.\scripts\doctor.ps1 -Provider github
+.\scripts\doctor.ps1 -Provider github -Json
+```
+
+- 诊断只回答「证据支持什么结论」，不执行恢复、不触发交互认证。
+- `gh auth status` 是证据不是判决；失败可能源于 keyring 可见性、网络、工具或作用域。
+- 交互认证仅作为最后手段，且需要诊断 + 非交互路径穷尽 + 用户同意。
+- 本技能继续管理 `.machine-tokens` 文件注入（v0.1，向后兼容）；v0.2 在其上增加诊断层。

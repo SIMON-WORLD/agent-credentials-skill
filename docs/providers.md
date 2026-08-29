@@ -20,3 +20,13 @@
 - 校验一律用只读接口，避免把令牌发到非官方端点。
 - 含明文令牌的配置文件（`.pypirc`、`.npmrc`）不提交、不进同步盘。
 - 各供应商令牌有效期检查方式不同：PyPI 可解码 base64 内嵌到期时间；其它供应商以校验接口返回为准。
+---
+
+## v0.2 Provider Adapter 契约
+
+新增供应商先读 [docs/provider-adapter-contract-v0.2.md](provider-adapter-contract-v0.2.md)：适配器 = 探测 + 归一化观察，公共协议唯一为 `Diagnosis Result v0.2`（schema + diagnostic-codes.json）。
+
+当前参考适配器：
+
+- GitHub（完整：发现 + 认证状态 + 传输）
+- npm（实验性参考：仅发现，`doctor.ps1 -Provider npm`；证明契约通用性，非完整实现）

@@ -77,6 +77,37 @@ gh auth status
 
 见 [examples/dual-github-accounts.md](examples/dual-github-accounts.md)。
 
+## v0.2 — Agent Credential Diagnosis
+
+定位：**Portable credential context for AI agents.** 核心行为规则：**Never re-authenticate before diagnosis.**
+
+生命周期：`Discover → Diagnose → Resolve → Verify → Recover`（v0.2 实现 Discover / Diagnose / Resolve；Verify / Recover 为后续执行层）。
+
+架构分层：
+
+- **Skill / policy layer**：`SKILL.md` 与策略规则（诊断先于重认证、交互认证最后手段）
+- **Provider adapters**：`scripts/providers/*.ps1`（发现、认证状态探测、传输探测，输出归一化观察）
+- **Diagnosis core**：`scripts/core/diagnosis.ps1`（供应商中立分类器，只消费观察）
+- **Resolution policy**：`scripts/core/resolution.ps1`（只推荐、不执行；交互认证仅作为最后手段）
+- **Result assembler**：`scripts/core/result.ps1`（组装为公共 `Diagnosis Result v0.2`）
+- **Future broker/execution layer**：执行恢复动作（未实现）
+- **Plugin/distribution layer**：各生态包装（未实现）
+
+`doctor` 用法（参考 CLI，仅诊断、不认证、不执行恢复）：
+
+```powershell
+.\scripts\doctor.ps1 -Provider github          # 人类可读摘要
+.\scripts\doctor.ps1 -Provider github -Json    # Diagnosis Result v0.2 JSON
+.\scripts\doctor.ps1 -Provider npm             # 参考适配器（实验性）
+```
+
+当前支持状况（如实）：
+
+- **GitHub**：完整 doctor 链路（发现 + 认证状态探测 + 传输探测 + 诊断 + 策略 + 组装）。
+- **npm**：v0.2 参考/实验适配器（仅发现），用于证明契约的通用性；GitHub 为完整实现。
+- **PowerShell 是参考实现**，不是协议要求；契约（schema/注册表/失败分类）语言中立。
+- **已知限制**：传输超时/通用传输失败暂无专用诊断码（保守返回 code=null）；Verify/Recover 与 broker 执行层未实现；交互认证永不自动触发。
+
 ## License
 
 MIT，见 [LICENSE](LICENSE)。
