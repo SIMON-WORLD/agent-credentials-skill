@@ -105,3 +105,35 @@ twine upload dist/*
 - `gh auth status` 是证据不是判决；失败可能源于 keyring 可见性、网络、工具或作用域。
 - 交互认证仅作为最后手段，且需要诊断 + 非交互路径穷尽 + 用户同意。
 - 本技能继续管理 `.machine-tokens` 文件注入（v0.1，向后兼容）；v0.2 在其上增加诊断层。
+
+## v0.3 Credential Context（凭据上下文）
+
+完整工作流：`Discover → Diagnose → Resolve Context → Execute Scoped → Verify → Recover`。
+
+- v0.2 Diagnosis 回答「凭据怎么了」；v0.3 Credential Context 回答「这次操作该用哪个已授权的逻辑凭据上下文」。
+- **按引用不按值**：context 层、绑定、公共输出只携带逻辑引用（`env/GH_TOKEN`、`cli/<host>/<account>`、`config/<registry>/<account>`、`connector/...`），原始值只在进程作用域执行边界内、执行时才解析。
+
+Agent 必须遵守的规则：
+
+1. **Never re-authenticate before diagnosis**（诊断先于重认证，v0.2 规则延续）。
+2. **绝不因为某个凭据引用存在就选它**（never select the first reference merely because it exists）；选择必须确定性、可复现。
+3. **显式 profile / account / host 约束绝不被悄悄放宽**；缺元数据的引用不能算作匹配。
+4. **歧义引用 → fail closed**：多个等价候选且无规则区分时，不选任何引用，交由策略/人工升级。
+5. **项目绑定是可选的**：无绑定时保持 v0.1 / v0.2 行为；绑定只存逻辑引用，不含秘密。
+6. **active GitHub 账号只是元数据**，不是自动选择依据；选择权在通用 resolver。
+7. **优先进程作用域凭据效果**：`scripts/core/execution.ps1` 只在子进程环境注入，父/全局认证状态不变；避免全局 `gh auth switch`。
+8. **原始秘密永不进入公共 Diagnosis Result / Credential Context / Agent 可见输出**。
+
+用法（选择/解析上下文，不自动执行子命令）：
+
+```powershell
+# 仓库内运行（v0.3.0）
+.\scripts\context.ps1 -Provider github -ReferencesJson '[...]'
+.\scripts\context.ps1 -Provider github -Profile personal -ReferencesJson '[...]'
+.\scripts\context.ps1 -Provider npm -Profile personal -ReferencesJson '[...]'
+.\scripts\context.ps1 -Provider github -ReferencesJson '[...]' -Json
+```
+
+- `scripts/context.ps1` 只解析/选择上下文；真正执行注入用 `scripts/core/execution.ps1`（参考进程作用域边界）。
+- v0.3 不是秘密保险库；原始凭据解析是调用方/执行层责任。
+- v0.1 `.machine-tokens` 文件注入、v0.2 doctor 诊断层全部保持向后兼容。

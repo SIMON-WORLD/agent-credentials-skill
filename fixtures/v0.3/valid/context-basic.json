@@ -1,0 +1,53 @@
+{
+  "contractVersion": "0.3.0",
+  "provider": "example-provider",
+  "operation": "publish",
+  "executionContext": {
+    "runtime": "host",
+    "runtimeIdentifier": "reference-implementation-test",
+    "keyringAccessible": false,
+    "envPropagated": true,
+    "networkReachable": true,
+    "toolAvailable": true
+  },
+  "requestedProfile": "personal",
+  "selectedProfile": "personal",
+  "expectedAccount": "alice@example.com",
+  "expectedHost": "example.com",
+  "availableReferences": [
+    {
+      "provider": "example-provider",
+      "sourceType": "env",
+      "reference": "env/EXAMPLE_TOKEN",
+      "account": "alice@example.com",
+      "profile": "personal",
+      "host": "example.com",
+      "metadata": {
+        "label": "example personal token reference"
+      }
+    },
+    {
+      "provider": "example-provider",
+      "sourceType": "connector",
+      "reference": "connector/default",
+      "account": "alice@example.com",
+      "profile": "personal",
+      "host": "example.com"
+    }
+  ],
+  "selectedReference": {
+    "provider": "example-provider",
+    "sourceType": "env",
+    "reference": "env/EXAMPLE_TOKEN",
+    "account": "alice@example.com",
+    "profile": "personal",
+    "host": "example.com",
+    "metadata": {
+      "label": "example personal token reference"
+    }
+  },
+  "ambiguity": false,
+  "metadata": {
+    "note": "neutral fixture for the credential-context contract; no secret material"
+  }
+}

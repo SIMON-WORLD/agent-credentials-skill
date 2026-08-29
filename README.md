@@ -5,6 +5,7 @@
 - 本机所有 Codex 会话通用：令牌放 `~/.machine-tokens/`，会话按需读入环境变量。
 - 沙箱友好：不依赖系统钥匙串；凭据失效时按统一流程「注入 → 校验 → 刷新」。
 - 可扩展：新供应商按五步法接入（见 [docs/providers.md](docs/providers.md)）。
+- 凭据上下文选择（v0.3）：在诊断之上，按 profile / account / host 确定性选择已授权的逻辑凭据上下文，默认不做全局 `gh auth switch`。
 
 ## 为什么用「文件注入」
 
@@ -107,6 +108,50 @@ gh auth status
 - **npm**：v0.2 参考/实验适配器（仅发现），用于证明契约的通用性；GitHub 为完整实现。
 - **PowerShell 是参考实现**，不是协议要求；契约（schema/注册表/失败分类）语言中立。
 - **已知限制**：传输超时/通用传输失败暂无专用诊断码（保守返回 code=null）；Verify/Recover 与 broker 执行层未实现；交互认证永不自动触发。
+
+## v0.3 — Agent Credential Context
+
+定位一句话：**Diagnosis v0.2 告诉 Agent「凭据怎么了」；Credential Context v0.3 决定「这次操作该用哪个已授权的逻辑凭据上下文」。**
+
+v0.3 在 v0.2 诊断之上新增「引用 → Profile → Context」选择层，仍然**按引用不按值**（credentials by reference, not by value），并且默认不做全局 `gh auth switch`。
+
+核心概念：
+
+- **CredentialReference**：一条凭据的逻辑引用（`provider` / `sourceType` / `reference` / 可选 `account` / `profile` / `host`），永远不携带原始凭据值。
+- **CredentialProfile**：稳定逻辑档案（如 `personal` / `work`），只选择引用、不含秘密；`account != profile != host`。
+- **CredentialContext**：一次操作解析出的上下文（provider / operation / requested/selected profile / expected account/host / availableReferences / selectedReference）。
+- **Project binding**：可选的项目/仓库 → provider/profile 绑定，只存逻辑引用，缺省完全向后兼容。
+- **确定性 / fail-closed 选择**：同输入同结果；歧义绝不静默选错账号/profile；显式约束绝不被悄悄放宽。
+- **进程作用域执行边界**：`execution.ps1` 为参考实现——执行时才解析原始值、只注入子进程环境、父/全局认证状态不变。
+- **GitHub 多账号**：同一 host 多个账号各自独立成引用；`active` 只是元数据，不是选择权。
+- **npm 第二提供商证明**：同一套通用 resolver / binding 对 GitHub 与 npm 无 provider 分支。
+
+用户用法（选择/解析上下文，**不会自动执行任何子命令**）：
+
+```powershell
+# 提供安全引用（JSON 字符串），解析 GitHub 上下文
+.\scripts\context.ps1 -Provider github -ReferencesJson '[...]'
+
+# profile / account / host 收窄
+.\scripts\context.ps1 -Provider github -Profile personal -ReferencesJson '[...]'
+.\scripts\context.ps1 -Provider github -Account alice -HostName github.com -ReferencesJson '[...]'
+
+# npm 上下文选择
+.\scripts\context.ps1 -Provider npm -Profile personal -ReferencesJson '[...]'
+
+# 项目绑定概念：绑定产出 requestedProfile / expectedHost，再走同一通用 resolver
+.\scripts\context.ps1 -Provider npm -Project pkg/npm-lib -BindingsJson '[{"project":"pkg/npm-lib","provider":"npm","profile":"personal"}]' -ReferencesJson '[...]'
+
+# 机器可读输出（仅消毒逻辑元数据，不声称是 v0.2 Diagnosis Result）
+.\scripts\context.ps1 -Provider github -ReferencesJson '[...]' -Json
+```
+
+要点澄清：
+
+- `scripts/context.ps1` **只解析/选择上下文**，不自动执行子命令；真正注入执行走 `scripts/core/execution.ps1`（参考进程作用域边界）。
+- **原始凭据的解析责任在调用方/执行层**，context 层只接触逻辑引用。
+- v0.3 **不是秘密保险库**：不加密、不托管、不轮换原始令牌。
+- 当前架构/版本：**v0.3.0**；v0.1 / v0.2 行为保持向后兼容。
 
 ## License
 

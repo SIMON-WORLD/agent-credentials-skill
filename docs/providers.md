@@ -26,7 +26,20 @@
 
 新增供应商先读 [docs/provider-adapter-contract-v0.2.md](provider-adapter-contract-v0.2.md)：适配器 = 探测 + 归一化观察，公共协议唯一为 `Diagnosis Result v0.2`（schema + diagnostic-codes.json）。
 
-当前参考适配器：
+## 供应商状态矩阵（v0.2 / v0.3）
 
-- GitHub（完整：发现 + 认证状态 + 传输）
-- npm（实验性参考：仅发现，`doctor.ps1 -Provider npm`；证明契约通用性，非完整实现）
+| 供应商 | v0.2 诊断 | v0.3 凭据上下文 |
+|---|---|---|
+| GitHub | 成熟/参考（发现 + 认证状态 + 传输 + doctor 完整链路） | 多账号/profile 逻辑引用适配器（`github-context.ps1`） |
+| npm | 参考/实验（仅发现，`doctor.ps1 -Provider npm`） | v0.3 上下文参考适配器（`npm-context.ps1`，无实时认证变更） |
+| PyPI | 保留 v0.1 行为（`check.ps1` / `refresh.ps1` / twine 注入） | 尚无完整 v0.3 上下文适配器 |
+| 其它供应商 | 未来/实验（按实际进展如实标注） | 未来/实验 |
+
+当前架构/版本：**v0.3.0**；v0.1 / v0.2 行为保持向后兼容。
+
+## Provider Adapter 边界（v0.3）
+
+- **提供商特定观察/引用转换**：适配器只负责把已消毒的观察转成逻辑引用（`env/...`、`cli/<host>/<account>`、`config/<registry>/<account>`、`connector/...`），并做确定性去重与冲突 fail-closed。
+- **通用 context resolver 保持 provider 中立**：`scripts/core/context.ps1` 的 `Resolve-AgentCredentialContext` 与 `scripts/core/binding.ps1` 的 `Resolve-AgentCredentialProjectProfile` 不含任何 provider 分支，GitHub / npm 走同一套逻辑。
+- **适配器绝不按数组顺序选择**：排序只用于报告；选择权归通用 resolver，歧义必须 fail-closed。
+- **适配器不拥有原始秘密存储**：不读原始值、不写凭据文件、不做 login/logout/config 变更；原始值只在执行层进程作用域内短暂存在。

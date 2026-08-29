@@ -1,0 +1,36 @@
+{
+  "contractVersion": "0.3.0",
+  "provider": "example-provider",
+  "operation": "publish",
+  "executionContext": {
+    "runtime": "host",
+    "keyringAccessible": false,
+    "envPropagated": true,
+    "networkReachable": true,
+    "toolAvailable": true
+  },
+  "requestedProfile": "personal",
+  "selectedProfile": "personal",
+  "expectedAccount": "alice@example.com",
+  "expectedHost": "example.com",
+  "availableReferences": [
+    {
+      "provider": "example-provider",
+      "sourceType": "env",
+      "reference": "env/EXAMPLE_TOKEN",
+      "account": "alice@example.com",
+      "profile": "personal",
+      "host": "example.com"
+    }
+  ],
+  "selectedReference": {
+    "provider": "example-provider",
+    "sourceType": "env",
+    "reference": "env/EXAMPLE_TOKEN",
+    "account": "alice@example.com",
+    "profile": "personal",
+    "host": "example.com"
+  },
+  "ambiguity": false,
+  "unsupportedField": true
+}
