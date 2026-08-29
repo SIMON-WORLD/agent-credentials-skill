@@ -133,3 +133,202 @@ function Get-AgentCredentialGitHubDiscovery {
         observations = $observations
     }
 }
+<#
+.SYNOPSIS
+  GitHub provider reference adapter — AUTH STATUS PROBING ONLY (Agent Credential Layer v0.2).
+.DESCRIPTION
+  Runs a read-only, machine-readable authentication-state probe (gh auth status --json hosts)
+  and returns normalized, sanitized observations. gh auth status is evidence, not verdict:
+  per-entry state is recorded as an observation, and no final Diagnosis Result, status,
+  diagnosis, resolution strategy, or reauth decision is produced here.
+.PARAMETER Runtime
+  Execution-context kind: host, sandbox, container, remote, ci, unknown.
+.PARAMETER RuntimeIdentifier
+  Optional safe runtime identifier supplied by the caller.
+.PARAMETER Platform
+  Optional generic platform identifier supplied by the caller.
+.PARAMETER Isolation
+  Optional isolation information supplied by the caller.
+.PARAMETER Hostname
+  Optional safe target hostname. When supplied, it is passed as a normal --hostname argument.
+  It is never derived from credential values and GH_HOST is never mutated. When omitted,
+  all hosts known to gh auth status are probed.
+.EXAMPLE
+  Get-AgentCredentialGitHubAuthProbe -Runtime sandbox -Hostname example.invalid
+#>
+function ConvertTo-AgentCredentialTokenSource {
+    [CmdletBinding()]
+    param([string]$TokenSourceRaw)
+
+    $knownEnv = @('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN')
+    foreach ($n in $knownEnv) {
+        if ($TokenSourceRaw -eq $n) { return [pscustomobject]@{ category = 'environment'; reference = ('env/' + $n) } }
+    }
+    if ($TokenSourceRaw -match '[\\/]' -or $TokenSourceRaw -match '^[A-Za-z]:') {
+        return [pscustomobject]@{ category = 'file'; reference = 'file' }
+    }
+    if ($TokenSourceRaw -match 'keyring|wincred|keychain|secret') {
+        return [pscustomobject]@{ category = 'keyring'; reference = 'keyring' }
+    }
+    if ($TokenSourceRaw -match 'browser') {
+        return [pscustomobject]@{ category = 'browser'; reference = 'browser' }
+    }
+    if ($TokenSourceRaw -eq '') {
+        return [pscustomobject]@{ category = 'unknown'; reference = 'unknown' }
+    }
+    return [pscustomobject]@{ category = 'other'; reference = 'other' }
+}
+
+function Get-AgentCredentialGitHubAuthProbe {
+    [CmdletBinding()]
+    param(
+        [ValidateSet('host', 'sandbox', 'container', 'remote', 'ci', 'unknown')]
+        [string]$Runtime = 'unknown',
+        [string]$RuntimeIdentifier = $null,
+        [string]$Platform = $null,
+        [string]$Isolation = $null,
+        [string]$Hostname = $null
+    )
+
+    $observations = New-Object System.Collections.Generic.List[object]
+
+    # Reuse the same read-only availability check as discovery. Never attempt
+    # auth probing when the tool is missing; never install it.
+    if (-not (Get-Command gh -CommandType Application -ErrorAction SilentlyContinue)) {
+        $observations.Add([pscustomobject]@{
+            probeType = 'command'
+            check = 'github-auth-status'
+            outcome = 'unavailable'
+            code = 'TOOL_NOT_INSTALLED'
+            reference = 'tool/gh'
+            source = $null
+            metadata = $null
+        })
+        return [pscustomobject]@{
+            provider = 'github'
+            operation = 'auth-probe'
+            executionContext = [pscustomobject]@{
+                runtime = $Runtime
+                runtimeIdentifier = $RuntimeIdentifier
+                platform = $Platform
+                isolation = $Isolation
+            }
+            observations = $observations
+        }
+    }
+
+    $ghArgs = @('auth', 'status', '--json', 'hosts')
+    if ($Hostname) {
+        $ghArgs += '--hostname'
+        $ghArgs += $Hostname
+    }
+
+    # Transport exit code is NOT a credential verdict. Machine-readable --json mode may
+    # return exit 0 even when an entry reports an error; per-entry state drives observations.
+    $stdout = & gh @ghArgs 2>$null
+    $parsed = $null
+    try { $parsed = ($stdout | Out-String | ConvertFrom-Json) } catch { $parsed = $null }
+
+    if ($null -eq $parsed -or $null -eq $parsed.hosts) {
+        $observations.Add([pscustomobject]@{
+            probeType = 'command'
+            check = 'github-auth-status'
+            outcome = 'failure'
+            code = $null
+            reference = ('cli/' + $(if ($Hostname) { $Hostname } else { 'all' }))
+            source = $null
+            metadata = [pscustomobject]@{ note = 'auth-status probe produced no parseable result; outcome inconclusive' }
+        })
+        return [pscustomobject]@{
+            provider = 'github'
+            operation = 'auth-probe'
+            executionContext = [pscustomobject]@{
+                runtime = $Runtime
+                runtimeIdentifier = $RuntimeIdentifier
+                platform = $Platform
+                isolation = $Isolation
+            }
+            observations = $observations
+        }
+    }
+
+    $hosts = $parsed.hosts
+    $props = @($hosts.PSObject.Properties)
+    if ($props.Count -eq 0) {
+        $observations.Add([pscustomobject]@{
+            probeType = 'auth'
+            check = 'github-auth-status'
+            outcome = 'unavailable'
+            code = $null
+            reference = 'cli/all'
+            source = $null
+            metadata = $null
+        })
+        return [pscustomobject]@{
+            provider = 'github'
+            operation = 'auth-probe'
+            executionContext = [pscustomobject]@{
+                runtime = $Runtime
+                runtimeIdentifier = $RuntimeIdentifier
+                platform = $Platform
+                isolation = $Isolation
+            }
+            observations = $observations
+        }
+    }
+
+    foreach ($p in $props) {
+        $hostName = [string]$p.Name
+        $entry = $p.Value
+
+        # Whitelist-only extraction. Unknown fields (including any token or
+        # credential-bearing property) are never forwarded; error text is dropped.
+        $state = [string]$entry.state
+        $active = [bool]$entry.active
+        $login = [string]$entry.login
+        $tokenSourceRaw = [string]$entry.tokenSource
+        $scopes = @()
+        if ($null -ne $entry.scopes) { $scopes = @($entry.scopes) }
+        $gitProtocol = [string]$entry.gitProtocol
+
+        $outcome = 'unknown'
+        $code = $null
+        switch ($state) {
+            'success' { $outcome = 'success' }
+            'timeout' { $outcome = 'timeout'; $code = 'AUTH_CHECK_TIMEOUT' }
+            'error'   { $outcome = 'failure' }
+            default   { $outcome = 'unknown' }
+        }
+
+        $src = ConvertTo-AgentCredentialTokenSource -TokenSourceRaw $tokenSourceRaw
+        $observations.Add([pscustomobject]@{
+            probeType = 'auth'
+            check = 'github-auth-status'
+            outcome = $outcome
+            code = $code
+            reference = ('cli/' + $hostName)
+            source = $null
+            metadata = [pscustomobject]@{
+                host = $hostName
+                active = $active
+                login = $login
+                tokenSourceCategory = $src.category
+                tokenSourceReference = $src.reference
+                scopes = $scopes
+                gitProtocol = $gitProtocol
+            }
+        })
+    }
+
+    [pscustomobject]@{
+        provider = 'github'
+        operation = 'auth-probe'
+        executionContext = [pscustomobject]@{
+            runtime = $Runtime
+            runtimeIdentifier = $RuntimeIdentifier
+            platform = $Platform
+            isolation = $Isolation
+        }
+        observations = $observations
+    }
+}
