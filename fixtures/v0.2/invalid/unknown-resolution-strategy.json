@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "0.2.0",
+  "provider": "example-provider",
+  "operation": "push",
+  "executionContext": { "runtime": "host" },
+  "status": "healthy",
+  "capabilities": [],
+  "availableCredentialSources": [],
+  "selectedCredentialSource": null,
+  "identity": null,
+  "network": null,
+  "diagnosis": { "code": null, "summary": "No failure observed" },
+  "recommendedResolution": { "strategy": "UNKNOWN_STRATEGY" },
+  "reauthRequired": false,
+  "evidence": []
+}

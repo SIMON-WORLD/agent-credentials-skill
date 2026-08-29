@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "0.2.0",
+  "provider": "example-provider",
+  "operation": "push",
+  "executionContext": { "runtime": "sandbox" },
+  "status": "degraded",
+  "capabilities": ["CONNECTOR_AVAILABLE"],
+  "availableCredentialSources": [],
+  "selectedCredentialSource": null,
+  "identity": null,
+  "network": null,
+  "diagnosis": { "code": "SANDBOX_KEYRING_UNAVAILABLE", "summary": "Keyring unavailable" },
+  "recommendedResolution": { "strategy": "USE_PROCESS_SCOPED_ENV" },
+  "reauthRequired": false,
+  "evidence": [
+    { "probeType": "credential-source", "check": "connector-check", "outcome": "success", "code": "CONNECTOR_AVAILABLE", "summary": "Connector present" }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "0.2.0",
+  "provider": "example-provider",
+  "operation": "push",
+  "executionContext": {
+    "runtime": "sandbox",
+    "runtimeIdentifier": "example-sandbox",
+    "platform": "example-platform",
+    "isolation": "sandbox"
+  },
+  "status": "degraded",
+  "capabilities": [],
+  "availableCredentialSources": [
+    { "type": "protectedFile", "reference": "file:/example/.credential-store/example-provider", "available": true }
+  ],
+  "selectedCredentialSource": { "type": "protectedFile", "reference": "file:/example/.credential-store/example-provider" },
+  "identity": null,
+  "network": { "reachable": true, "dns": true, "proxy": true, "timeout": false, "tls": true },
+  "diagnosis": {
+    "code": "SANDBOX_KEYRING_UNAVAILABLE",
+    "category": "execution-context",
+    "conclusive": true,
+    "confidence": 0.9,
+    "summary": "Preferred keyring-backed path is unavailable in the sandbox; a protected file source is usable."
+  },
+  "recommendedResolution": {
+    "strategy": "USE_PROCESS_SCOPED_ENV",
+    "steps": ["inject the protected file reference into the child process", "verify", "execute operation"],
+    "actionRequired": false
+  },
+  "reauthRequired": false,
+  "evidence": [
+    { "probeType": "context", "check": "execution-context.keyring", "outcome": "unavailable", "code": "SANDBOX_KEYRING_UNAVAILABLE", "summary": "Keyring backend not accessible in sandbox" },
+    { "probeType": "credential-source", "check": "source.protectedFile", "outcome": "success", "code": null, "summary": "Protected file source present" }
+  ]
+}

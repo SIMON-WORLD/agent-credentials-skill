@@ -1,0 +1,197 @@
+{
+  "registry": "agent-credentials-skill-diagnostic-codes",
+  "version": "0.2.0",
+  "description": "Machine-readable registry of protocol codes for the Agent Credential Layer diagnosis contract. Three namespaces are kept strictly separate: capability/state codes (positive observations), diagnosis/failure codes (negative causes), and resolution strategy codes (policy outcomes). Reauthentication is a policy result, never a per-code boolean.",
+  "namespaces": ["capability", "failure", "resolution"],
+  "reauthPolicy": {
+    "model": "policy-evaluated",
+    "note": "reauthRequired is computed by the policy layer from the full diagnosis. Entries under reauthGuidance are advisory guidance only and never imply automatic reauthentication.",
+    "guidanceValues": ["inappropriate", "conditional", "final-fallback"]
+  },
+  "codes": {
+    "capability": {
+      "CONNECTOR_AVAILABLE": {
+        "description": "An already-authenticated platform connector is usable for this provider.",
+        "kind": "state",
+        "preferredResolutions": ["USE_CONNECTOR"]
+      }
+    },
+    "failure": {
+      "CREDENTIAL_NOT_FOUND": {
+        "description": "No candidate credential exists in any enabled source.",
+        "category": "credential",
+        "reauthGuidance": "final-fallback",
+        "failClosed": false,
+        "preferredResolutions": [
+          "USE_CONNECTOR",
+          "USE_EXISTING_CLI_AUTH",
+          "USE_PROCESS_SCOPED_ENV",
+          "USE_PROTECTED_FILE",
+          "USE_EXTERNAL_BROKER",
+          "INTERACTIVE_AUTH"
+        ]
+      },
+      "CREDENTIAL_INVALID": {
+        "description": "A candidate credential is present but rejected by the provider (for example 401 or 403).",
+        "category": "credential",
+        "reauthGuidance": "conditional",
+        "failClosed": false,
+        "preferredResolutions": ["REFRESH_CREDENTIAL", "INTERACTIVE_AUTH"]
+      },
+      "CREDENTIAL_SOURCE_UNAVAILABLE": {
+        "description": "A configured credential source cannot be read (access control, connector offline, or missing file).",
+        "category": "credential",
+        "reauthGuidance": "inappropriate",
+        "failClosed": false,
+        "preferredResolutions": ["MANUAL_REVIEW"]
+      },
+      "SANDBOX_KEYRING_UNAVAILABLE": {
+        "description": "The OS keyring or credential store is not accessible from this execution context.",
+        "category": "execution-context",
+        "reauthGuidance": "inappropriate",
+        "failClosed": false,
+        "preferredResolutions": ["USE_PROCESS_SCOPED_ENV", "USE_CONNECTOR", "USE_PROTECTED_FILE"]
+      },
+      "ENV_NOT_PROPAGATED": {
+        "description": "An expected environment variable is absent from this process context.",
+        "category": "execution-context",
+        "reauthGuidance": "inappropriate",
+        "failClosed": false,
+        "preferredResolutions": ["USE_PROCESS_SCOPED_ENV", "USE_PROTECTED_FILE"]
+      },
+      "NETWORK_BLOCKED": {
+        "description": "The provider endpoint is unreachable due to egress policy or blocking.",
+        "category": "network",
+        "reauthGuidance": "inappropriate",
+        "failClosed": false,
+        "preferredResolutions": ["FIX_NETWORK"]
+      },
+      "DNS_FAILURE": {
+        "description": "Hostname resolution failed.",
+        "category": "network",
+        "reauthGuidance": "inappropriate",
+        "failClosed": false,
+        "preferredResolutions": ["FIX_DNS"]
+      },
+      "PROXY_MISCONFIGURED": {
+        "description": "Proxy settings are invalid or intercepting traffic.",
+        "category": "network",
+        "reauthGuidance": "inappropriate",
+        "failClosed": false,
+        "preferredResolutions": ["FIX_PROXY"]
+      },
+      "TOOL_NOT_INSTALLED": {
+        "description": "A required CLI tool is missing.",
+        "category": "tool",
+        "reauthGuidance": "inappropriate",
+        "failClosed": false,
+        "preferredResolutions": ["INSTALL_TOOL"]
+      },
+      "TOOL_EXECUTION_UNAVAILABLE": {
+        "description": "A CLI tool is present but cannot execute in this context (for example a denied subprocess).",
+        "category": "tool",
+        "reauthGuidance": "inappropriate",
+        "failClosed": false,
+        "preferredResolutions": ["MANUAL_REVIEW", "USE_EXTERNAL_BROKER"]
+      },
+      "WRONG_ACCOUNT": {
+        "description": "A valid credential authenticates a different account than the target.",
+        "category": "account",
+        "reauthGuidance": "inappropriate",
+        "failClosed": false,
+        "preferredResolutions": ["SELECT_ACCOUNT"]
+      },
+      "WRONG_HOST": {
+        "description": "A valid credential belongs to a different host than the target.",
+        "category": "account",
+        "reauthGuidance": "inappropriate",
+        "failClosed": false,
+        "preferredResolutions": ["CORRECT_HOST"]
+      },
+      "WRONG_PROFILE": {
+        "description": "A credential matches the account but the wrong profile or selection is active.",
+        "category": "account",
+        "reauthGuidance": "inappropriate",
+        "failClosed": false,
+        "preferredResolutions": ["SELECT_PROFILE"]
+      },
+      "TOKEN_SCOPE_INSUFFICIENT": {
+        "description": "The credential authenticates but lacks the required scope for the operation.",
+        "category": "scope",
+        "reauthGuidance": "inappropriate",
+        "failClosed": false,
+        "preferredResolutions": ["REQUEST_ADDITIONAL_SCOPE"]
+      },
+      "AUTH_CHECK_TIMEOUT": {
+        "description": "A validation probe exceeded its time budget; the result is inconclusive.",
+        "category": "diagnostic",
+        "reauthGuidance": "inappropriate",
+        "failClosed": true,
+        "preferredResolutions": ["RETRY_AUTH_CHECK", "MANUAL_REVIEW"]
+      },
+      "DIAGNOSIS_INCONCLUSIVE": {
+        "description": "Evidence is insufficient to classify the failure.",
+        "category": "diagnostic",
+        "reauthGuidance": "inappropriate",
+        "failClosed": true,
+        "preferredResolutions": ["MANUAL_REVIEW", "RETRY_AUTH_CHECK"]
+      }
+    },
+    "resolution": {
+      "USE_CONNECTOR": {
+        "description": "Route the operation through an already-authenticated platform connector."
+      },
+      "USE_EXISTING_CLI_AUTH": {
+        "description": "Use an accessible authenticated CLI or keyring path."
+      },
+      "USE_PROCESS_SCOPED_ENV": {
+        "description": "Materialize a credential reference into the child-process environment for this operation only."
+      },
+      "USE_PROTECTED_FILE": {
+        "description": "Use an explicitly configured protected local file source."
+      },
+      "USE_EXTERNAL_BROKER": {
+        "description": "Resolve the credential from an external broker (future capability)."
+      },
+      "SELECT_ACCOUNT": {
+        "description": "Select the correct account credential or source."
+      },
+      "SELECT_PROFILE": {
+        "description": "Switch to the correct profile selection."
+      },
+      "CORRECT_HOST": {
+        "description": "Use the credential or configuration for the correct host."
+      },
+      "FIX_NETWORK": {
+        "description": "Repair network reachability, then re-diagnose."
+      },
+      "FIX_DNS": {
+        "description": "Repair DNS resolution, then re-diagnose."
+      },
+      "FIX_PROXY": {
+        "description": "Repair proxy configuration, then re-diagnose."
+      },
+      "INSTALL_TOOL": {
+        "description": "Install the required CLI tool or use a REST fallback."
+      },
+      "RETRY_AUTH_CHECK": {
+        "description": "Retry the validation probe with a bounded time budget."
+      },
+      "REFRESH_CREDENTIAL": {
+        "description": "Re-register or refresh the existing credential from a configured source."
+      },
+      "REQUEST_ADDITIONAL_SCOPE": {
+        "description": "Obtain a credential with the required scopes rather than repeating the same login."
+      },
+      "INTERACTIVE_AUTH": {
+        "description": "Interactive authentication as the final fallback, only after non-interactive recovery is exhausted and the user consents."
+      },
+      "MANUAL_REVIEW": {
+        "description": "Escalate to a human with the sanitized evidence; take no automated action."
+      },
+      "NO_ACTION": {
+        "description": "Fail closed; report evidence and take no action."
+      }
+    }
+  }
+}

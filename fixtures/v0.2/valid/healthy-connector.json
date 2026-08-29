@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "0.2.0",
+  "provider": "example-provider",
+  "operation": "push",
+  "executionContext": {
+    "runtime": "host",
+    "runtimeIdentifier": "example-runtime",
+    "platform": "example-platform",
+    "isolation": null
+  },
+  "status": "healthy",
+  "capabilities": ["CONNECTOR_AVAILABLE"],
+  "availableCredentialSources": [
+    { "type": "platformConnector", "reference": "connector/default", "available": true }
+  ],
+  "selectedCredentialSource": { "type": "platformConnector", "reference": "connector/default" },
+  "identity": { "account": "example-account", "host": "example.invalid", "profile": "example-profile" },
+  "network": { "reachable": true, "dns": true, "proxy": true, "timeout": false, "tls": true },
+  "diagnosis": {
+    "code": null,
+    "conclusive": true,
+    "summary": "All probes positive; the requested credential capability is usable."
+  },
+  "recommendedResolution": {
+    "strategy": "USE_CONNECTOR",
+    "steps": ["proceed with the operation using the selected connector"],
+    "actionRequired": false
+  },
+  "reauthRequired": false,
+  "evidence": [
+    { "probeType": "provider-api", "check": "provider.verify", "outcome": "success", "code": null, "summary": "Verification succeeded" }
+  ]
+}
