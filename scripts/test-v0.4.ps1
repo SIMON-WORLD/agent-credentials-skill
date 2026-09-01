@@ -1042,6 +1042,17 @@ Invoke-Test 'R40 legacy no-descriptor callback path keeps v0.4 behavior' {
     Assert-True ($r.out -match 'outcome: executed') ("out=$($r.out)")
 }
 
+# --- v0.5 finalize regressions ---
+Invoke-Test 'R41 requested id without descriptors -> execution fails closed' {
+    $plan = New-AgentCredentialExecutionPlan -Provider 'github' -Operation 'push' -Diagnosis (New-Diag 'healthy') -Context (New-Ctx 'selected' (New-Ref 'cli/github.com/alice' 'github' 'cli'))
+    $script:resolverCalls = 0
+    $r = Invoke-AgentCredentialExecutionPlan -ExecutionPlan $plan -Executable 'pwsh.exe' -ArgumentList @('-NoProfile','-Command',(ExecSentinelChildScript 'ACS_R41')) -EnvironmentVariable 'ACS_R41' -Resolver { param($x) $script:resolverCalls++ ; return 'x' } -ResolverRequestedId 'cli'
+    Assert-True ($r.executed -eq $false) ("executed=$($r.executed)")
+    Assert-True ($script:resolverCalls -eq 0) ("resolver calls=$($script:resolverCalls)")
+    Assert-True ($r.outcome -eq 'error') ("outcome=$($r.outcome)")
+    Assert-True ($r.summary -match 'requires resolver descriptors') ("summary=$($r.summary)")
+}
+
 $failures = @($script:results | Where-Object { -not $_.ok })
 if ($failures.Count -eq 0) { Write-Output ('ALL PASS (' + $script:results.Count + ' tests)'); exit 0 }
 Write-Output ('FAILED: ' + (($failures | ForEach-Object { $_.name }) -join ', ')); exit 1

@@ -91,6 +91,12 @@ function Invoke-AgentCredentialExecutionPlan {
     $provider = [string](Get-AgentCredentialBrokerExecutionField $ExecutionPlan 'provider')
     $operation = [string](Get-AgentCredentialBrokerExecutionField $ExecutionPlan 'operation')
 
+    # v0.5 API consistency: an explicit requested resolver requires descriptors; fail closed before
+    # any resolver raw access / child launch. This mirrors the broker CLI gate but is self-contained.
+    if (-not [string]::IsNullOrEmpty($ResolverRequestedId) -and $ResolverDescriptors.Count -eq 0) {
+        return New-AgentCredentialExecutionNonResult -Provider $provider -Operation $operation -Outcome 'error' -Summary 'a requested resolver id requires resolver descriptors'
+    }
+
     # --- gate invariants (fail closed before any resolver raw access / child launch) ---
     $contractVersion = [string](Get-AgentCredentialBrokerExecutionField $ExecutionPlan 'contractVersion')
     $gate = [string](Get-AgentCredentialBrokerExecutionField $ExecutionPlan 'gate')

@@ -1,6 +1,6 @@
 # RFC v0.5 — Agent Credential Layer: Credential Resolver (Reference → Material)
 
-- Status: Implemented / Release candidate
+- Status: Implemented
 - Contract version: `0.5.0` (resolver layer); `v0.2` Diagnosis Result, `v0.3` Credential Context, and `v0.4` Credential ExecutionPlan/`v0.4.0` remain unchanged
 - Scope: `v0.5 core = Credential Resolver`. Freeze the architecture and trust boundary for resolving an already-selected logical `CredentialReference` into runtime-private, ephemeral `CredentialMaterial`. Runtime/resolver reference implementation now lives in `scripts/core/resolver.ps1`.
 - Repository: `agent-credentials-skill`
