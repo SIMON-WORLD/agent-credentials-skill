@@ -96,7 +96,8 @@ function Invoke-AgentCredentialScopedCommand {
         [scriptblock]$Resolver,
         [string]$WorkingDirectory = '',
         [int]$TimeoutSeconds = 0,
-        [switch]$IncludeStdoutStderr
+        [switch]$IncludeStdoutStderr,
+        [object]$PreResolved = $null
     )
 
     # --- extract the logical reference string (never a value) ---
@@ -154,20 +155,27 @@ function Invoke-AgentCredentialScopedCommand {
     }
 
     # --- resolve the raw value at execution time; never leak resolver errors ---
+    # -PreResolved carries an already-resolved runtime-private value (v0.5 descriptor-aware path);
+    # when absent the legacy resolver callback is invoked with the logical reference (string).
     $rawValue = $null
-    try {
-        $rawValue = & $Resolver $refId
+    if ($null -ne $PreResolved) {
+        $rawValue = $PreResolved
     }
-    catch {
-        $rawValue = $null
-        return [PSCustomObject]@{
-            outcome  = 'failure'
-            exitCode = $null
-            reference = $refId
-            command  = $Executable
-            stdout   = $null
-            stderr   = $null
-            summary  = 'credential resolver failed'
+    else {
+        try {
+            $rawValue = & $Resolver $refId
+        }
+        catch {
+            $rawValue = $null
+            return [PSCustomObject]@{
+                outcome  = 'failure'
+                exitCode = $null
+                reference = $refId
+                command  = $Executable
+                stdout   = $null
+                stderr   = $null
+                summary  = 'credential resolver failed'
+            }
         }
     }
 

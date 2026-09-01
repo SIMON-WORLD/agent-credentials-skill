@@ -179,6 +179,8 @@ Agent 必须遵守的规则：
 6. **provider 适配器 ≠ resolver 实现**：`scripts/providers/*` 发现/适配；resolver 是「把引用解析成私有凭据」的能力。
 7. **`.machine-tokens` 只是参考存储约定**，不是协议要求；可移植 resolver 不得假设固定文件路径。
 
+8. **最小 reference-implementation binding**：一个匹配到的 `ResolverDescriptor` + 一个调用方提供的运行时 `CredentialResolver` 实现；这**不是** resolver 插件注册表/平台。descriptor-aware 执行时，resolver 回调收到的是完整的已选 `CredentialReference` 对象（provider/sourceType/reference/account/profile/host），而不是裸 reference 字符串。
+
 公共契约：`schema/credential-resolver.schema.json`（`0.5.0`，只含 `ResolverDescriptor` / `ResolverOutcome`，不含 raw `CredentialMaterial`）、`scripts/validate-resolver.ps1`、`fixtures/v0.5/...`、`scripts/core/resolver.ps1`（纯匹配 + 运行时私有参考绑定）。
 
 Broker 可选 resolver 能力门禁（向后兼容；不传 descriptor 仍走原有回调）：

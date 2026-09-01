@@ -229,6 +229,11 @@ and does not depend on array order.
 `.machine-tokens` is a **reference** storage convention, **never** a protocol requirement. Portable resolvers must not assume
 `%USERPROFILE%\.machine-tokens\`; a file reference is always a logical reference string, never a filesystem path.
 
+**Reference implementation binding (current):** one matched `ResolverDescriptor` + one caller-supplied runtime
+`CredentialResolver` implementation. This is **not** a resolver plugin registry/platform. In descriptor-aware
+execution the runtime resolver callback receives the exact selected `CredentialReference` object
+(provider/sourceType/reference/account/profile/host), never a bare reference string.
+
 ---
 
 ## 12. Runtime Neutrality

@@ -153,7 +153,7 @@ if ($Execute) {
     elseif (-not [string]::IsNullOrEmpty($ResolverRequestedId)) {
         Write-BrokerError 'a requested resolver id requires resolver descriptors'
     }
-    $execResult = Invoke-AgentCredentialExecutionPlan -ExecutionPlan $plan -Executable $Executable -ArgumentList $ArgumentList -EnvironmentVariable $EnvironmentVariable -Resolver $CredentialResolver -TimeoutSeconds $TimeoutSeconds
+    $execResult = Invoke-AgentCredentialExecutionPlan -ExecutionPlan $plan -Executable $Executable -ArgumentList $ArgumentList -EnvironmentVariable $EnvironmentVariable -Resolver $CredentialResolver -TimeoutSeconds $TimeoutSeconds -ResolverDescriptors $ResolverDescriptors -ResolverRequestedId $ResolverRequestedId
     if ($Json) {
         $execResult | ConvertTo-Json -Depth 8
         exit 0

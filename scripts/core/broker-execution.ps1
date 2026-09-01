@@ -83,7 +83,9 @@ function Invoke-AgentCredentialExecutionPlan {
         [scriptblock]$Resolver,
         [string]$WorkingDirectory = '',
         [int]$TimeoutSeconds = 0,
-        [switch]$IncludeStdoutStderr
+        [switch]$IncludeStdoutStderr,
+        [object[]]$ResolverDescriptors = @(),
+        [string]$ResolverRequestedId = $null
     )
 
     $provider = [string](Get-AgentCredentialBrokerExecutionField $ExecutionPlan 'provider')
@@ -131,7 +133,45 @@ function Invoke-AgentCredentialExecutionPlan {
         return New-AgentCredentialExecutionNonResult -Provider $provider -Operation $operation -Outcome 'error' -Summary 'ready plan violates pre-execution invariants'
     }
 
-    # --- delegate to the existing v0.3 process-scoped boundary ---
+    # --- v0.5 descriptor-aware execution: full reference + typed-failure semantics ---
+    if ($ResolverDescriptors.Count -gt 0) {
+        $verdict = Select-AgentCredentialResolver -Reference $selRef -Descriptors $ResolverDescriptors -RequestedId $ResolverRequestedId
+        if ($verdict.status -ne 'matched') {
+            return New-AgentCredentialExecutionNonResult -Provider $provider -Operation $operation -Outcome 'failed' -Summary 'resolver selection did not produce a single compatible resolver'
+        }
+        $internal = Invoke-AgentCredentialResolverMaterial -Reference $selRef -Resolver $Resolver -EnvironmentVariable $EnvironmentVariable
+        if ($internal.outcome -ne 'resolved') {
+            # Fail closed: never launch the child, never coerce the typed failure object into a value.
+            return [PSCustomObject]@{
+                provider   = $provider
+                operation  = $operation
+                outcome    = 'failed'
+                executed   = $false
+                exitCode   = $null
+                summary    = ('resolver ' + $internal.reasonCode + ' :: ' + $internal.summary)
+                reasonCode = $internal.reasonCode
+            }
+        }
+        # Success: inject the runtime-private material only into the child env via the existing
+        # scoped boundary. -PreResolved means the resolver is not invoked a second time.
+        $ref = Invoke-AgentCredentialScopedCommand -CredentialReference $selRef -Executable $Executable -ArgumentList $ArgumentList -EnvironmentVariable $EnvironmentVariable -Resolver $Resolver -PreResolved $internal.material -WorkingDirectory $WorkingDirectory -TimeoutSeconds $TimeoutSeconds -IncludeStdoutStderr:$IncludeStdoutStderr
+        $exitCode = $null
+        $summary = 'execution completed'
+        if ($null -ne $ref.exitCode) { $exitCode = $ref.exitCode }
+        if ($ref.outcome -eq 'timeout') { $summary = 'execution timed out' }
+        elseif ($null -eq $exitCode) { $summary = 'execution could not start (resolver or launch failure)' }
+        elseif ($exitCode -ne 0) { $summary = 'execution failed' }
+        return [PSCustomObject]@{
+            provider  = $provider
+            operation = $operation
+            outcome   = 'executed'
+            executed  = $true
+            exitCode  = $exitCode
+            summary   = $summary
+        }
+    }
+
+    # --- legacy path (no descriptors): unchanged v0.4 caller-supplied resolver behavior ---
     $ref = Invoke-AgentCredentialScopedCommand -CredentialReference $selRef -Executable $Executable -ArgumentList $ArgumentList -EnvironmentVariable $EnvironmentVariable -Resolver $Resolver -WorkingDirectory $WorkingDirectory -TimeoutSeconds $TimeoutSeconds -IncludeStdoutStderr:$IncludeStdoutStderr
 
     $exitCode = $null

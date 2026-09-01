@@ -755,7 +755,8 @@ Invoke-Test 'R1 compatible resolver + exact ref -> execute' {
 }
 Invoke-Test 'R2 resolver receives exact logical ref' {
     $descs = '[' + $descCli + ']'
-    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R2')) 'ACS_R2' $execResNormal
+    $resolverText = "param(`$r)`r`nSet-Content -LiteralPath '@GOT@' -Value `$r.reference`r`nreturn '" + $script:execSentinel + "'"
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R2')) 'ACS_R2' $resolverText
     Assert-True ($r.got -eq 'cli/github.com/alice') ("resolver got ref=$($r.got)")
 }
 Invoke-Test 'R3 zero compatible -> fail closed before raw' {
@@ -958,6 +959,87 @@ Invoke-Test 'R30 reversing duplicate/mixed descriptors cannot change verdict' {
     $v1 = Select-AgentCredentialResolver -Reference $ref -Descriptors $fwd
     $v2 = Select-AgentCredentialResolver -Reference $ref -Descriptors $rev
     Assert-True ($v1.status -eq $v2.status -and $v1.status -eq 'ambiguous') "v1=$($v1.status) v2=$($v2.status)"
+}
+
+# --- v0.5 runtime-integration regressions (R31-R40) ---
+Invoke-Test 'R31 descriptor-aware resolver receives full exact CredentialReference object' {
+    $descs = '[' + $descCli + ']'
+    $resolverText = "param(`$r)`r`nSet-Content -LiteralPath '@GOT@' -Value ((`$r.provider + '|' + `$r.sourceType + '|' + `$r.reference + '|' + `$r.account + '|' + `$r.profile + '|' + `$r.host))`r`nreturn '" + $script:execSentinel + "'"
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R31')) 'ACS_R31' $resolverText
+    Assert-True ($r.got -eq 'github|cli|cli/github.com/alice|alice|personal|github.com') ("got=$($r.got) out=$($r.out)")
+    Assert-True ($r.out -match 'outcome: executed') ("out=$($r.out)")
+}
+Invoke-Test 'R32 typed CREDENTIAL_NOT_FOUND -> child not started' {
+    $descs = '[' + $descCli + ']'
+    $resolverText = "param(`$r)`r`nreturn [pscustomobject]@{outcome='failed';reasonCode='CREDENTIAL_NOT_FOUND'}`r`n"
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R32')) 'ACS_R32' $resolverText
+    Assert-True ($r.out -match 'executed: false') ("out=$($r.out)")
+    Assert-True ($r.out -match 'CREDENTIAL_NOT_FOUND') "out=$($r.out)"
+}
+Invoke-Test 'R33 typed TOKEN_SCOPE_INSUFFICIENT -> child not started' {
+    $descs = '[' + $descCli + ']'
+    $resolverText = "param(`$r)`r`nreturn [pscustomobject]@{outcome='failed';reasonCode='TOKEN_SCOPE_INSUFFICIENT'}`r`n"
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R33')) 'ACS_R33' $resolverText
+    Assert-True ($r.out -match 'executed: false') ("out=$($r.out)")
+    Assert-True ($r.out -match 'TOKEN_SCOPE_INSUFFICIENT') "out=$($r.out)"
+}
+Invoke-Test 'R34 resolver throw -> child not started + no exception leak' {
+    $descs = '[' + $descCli + ']'
+    $resolverText = "param(`$r)`r`nthrow ('boom ' + '$script:execSentinel')`r`n"
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R34')) 'ACS_R34' $resolverText
+    Assert-True ($r.out -match 'executed: false') ("out=$($r.out)")
+    Assert-True ($r.out -notmatch 'boom') "exception leaked: $($r.out)"
+    Assert-True ($r.out -notlike ('*'+$script:execSentinel+'*')) "sentinel leaked: $($r.out)"
+}
+Invoke-Test 'R35 typed failure object never coerced to credential string' {
+    $descs = '[' + $descCli + ']'
+    $resolverText = "param(`$r)`r`nreturn [pscustomobject]@{outcome='failed';reasonCode='CREDENTIAL_NOT_FOUND';rawToken='$script:execSentinel';material='$script:execSentinel'}`r`n"
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R35')) 'ACS_R35' $resolverText
+    Assert-True ($r.out -match 'executed: false') ("out=$($r.out)")
+    Assert-True ($r.out -notlike ('*'+$script:execSentinel+'*')) "raw leaked: $($r.out)"
+}
+Invoke-Test 'R36 raw success only in child; public result no raw' {
+    $descs = '[' + $descCli + ']'
+    $resolverText = "param(`$r)`r`nreturn '$script:execSentinel'`r`n"
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R36')) 'ACS_R36' $resolverText
+    Assert-True ($r.out -match 'executed: true') ("out=$($r.out)")
+    Assert-True ($r.out -notlike ('*'+$script:execSentinel+'*')) "raw leaked: $($r.out)"
+}
+Invoke-Test 'R37 parent env unchanged after success and failure' {
+    $descs = '[' + $descCli + ']'
+    $okResolver = "param(`$r)`r`nreturn '$script:execSentinel'`r`n"
+    $failResolver = "param(`$r)`r`nreturn [pscustomobject]@{outcome='failed';reasonCode='CREDENTIAL_NOT_FOUND'}`r`n"
+    $null = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R37')) 'ACS_R37' $okResolver
+    $present = Get-Item -Path 'env:ACS_R37' -ErrorAction SilentlyContinue
+    Assert-True ($null -eq $present) 'parent env leaked after success'
+    $null = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R37')) 'ACS_R37' $failResolver
+    $present2 = Get-Item -Path 'env:ACS_R37' -ErrorAction SilentlyContinue
+    Assert-True ($null -eq $present2) 'parent env leaked after failure'
+}
+Invoke-Test 'R38 matched resolverId does not change selected CredentialReference' {
+    $ref = [pscustomobject]$refCli
+    $d = $descCli | ConvertFrom-Json
+    $before = $ref.reference
+    $v = Select-AgentCredentialResolver -Reference $ref -Descriptors @($d)
+    Assert-True ($v.status -eq 'matched') "status=$($v.status)"
+    Assert-True ($ref.reference -eq $before -and $ref.provider -eq 'github') 'reference mutated'
+    Assert-True ($v.resolver.resolverId -eq 'cli') "resolverId=$($v.resolver.resolverId)"
+}
+Invoke-Test 'R39 ambiguous/no-match descriptor -> callback count 0' {
+    $c1 = $descCli | ConvertFrom-Json
+    $c2 = $descCli | ConvertFrom-Json
+    $c2.resolverId = 'cli2'
+    $descsAmbig = '[' + ($c1 | ConvertTo-Json -Compress) + ',' + ($c2 | ConvertTo-Json -Compress) + ']'
+    $resolverText = "param(`$r)`r`nSet-Content -LiteralPath '@GOT@' -Value 'CALLED'`r`nreturn '" + $script:execSentinel + "'"
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descsAmbig $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R39')) 'ACS_R39' $resolverText
+    Assert-True ($r.got -ne 'CALLED') "resolver invoked ($($r.got))"
+    Assert-True ($r.exit -ne 0) "exit=$($r.exit) out=$($r.out)"
+}
+Invoke-Test 'R40 legacy no-descriptor callback path keeps v0.4 behavior' {
+    $resolverText = "param(`$r)`r`nSet-Content -LiteralPath '@GOT@' -Value `$r`r`nreturn '" + $script:execSentinel + "'"
+    $r = Run-BrokerExec 'github' 'push' $diagH $ghOne 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R40')) 'ACS_R40' $resolverText
+    Assert-True ($r.got -eq 'cli/github.com/alice') "legacy got=$($r.got)"
+    Assert-True ($r.out -match 'outcome: executed') ("out=$($r.out)")
 }
 
 $failures = @($script:results | Where-Object { -not $_.ok })

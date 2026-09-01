@@ -293,6 +293,61 @@ function ConvertTo-AgentCredentialResolverFailClosedOutcome {
     }
 }
 
+function Invoke-AgentCredentialResolverMaterial {
+    <#
+    .SYNOPSIS
+      Shared runtime-private resolver invocation for the v0.5 reference implementation.
+    .DESCRIPTION
+      Calls the resolver callback with the EXACT selected logical CredentialReference (never a bare
+      reference string) and interprets the result as either resolved raw runtime-private material or
+      a controlled typed failure. It is the single source of resolver-semantics interpretation, used
+      by both the public outcome binder and the descriptor-aware execution path, so semantics are
+      never duplicated. Returns an object with outcome (resolved|unavailable|failed), material
+      (runtime-private, or $null), reasonCode (sanitized), and summary (sanitized). Raw material is
+      returned only to the in-process caller and is never serialized, logged, persisted, or put into
+      any public shape.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][object]$Reference,
+        [Parameter(Mandatory = $true)][scriptblock]$Resolver,
+        [string]$EnvironmentVariable = $null,
+        [int]$LifetimeSeconds = 300
+    )
+    $raw = $null
+    $throwCode = $null
+    try { $raw = & $Resolver $Reference }
+    catch { $throwCode = 'RESOLVER_ERROR' }
+    if ($null -ne $throwCode) {
+        return [pscustomobject]@{ outcome='failed'; material=$null; reasonCode='RESOLVER_ERROR'; summary='resolver threw an exception' }
+    }
+    $typed = $raw.PSObject.Properties['outcome']
+    if ($null -ne $typed -and $null -ne $raw) {
+        $typedOutcome = [string]$raw.outcome
+        $typedReason = [string](Get-AgentCredentialResolverField $raw 'reasonCode')
+        $allowed = Get-AgentCredentialResolverAllowedReasonCodes
+        $reasonCode = $null
+        if (-not [string]::IsNullOrEmpty($typedReason)) {
+            if ($allowed -contains $typedReason) { $reasonCode = $typedReason } else { $reasonCode = 'RESOLVER_ERROR' }
+        }
+        if ($typedOutcome -notin @('resolved','unavailable','failed')) {
+            return [pscustomobject]@{ outcome='failed'; material=$null; reasonCode='RESOLVER_ERROR'; summary='resolver returned an invalid typed outcome' }
+        }
+        if ($typedOutcome -eq 'resolved') {
+            $mat = Get-AgentCredentialResolverField $raw 'material'
+            if ($null -eq $mat) {
+                return [pscustomobject]@{ outcome='failed'; material=$null; reasonCode='RESOLVER_ERROR'; summary='resolver returned resolved without material' }
+            }
+            return [pscustomobject]@{ outcome='resolved'; material=$mat; reasonCode=$null; summary='resolver produced material' }
+        }
+        return [pscustomobject]@{ outcome=$typedOutcome; material=$null; reasonCode=$(if($null -eq $reasonCode){'RESOLVER_ERROR'}else{$reasonCode}); summary='resolver did not produce material' }
+    }
+    if ($null -eq $raw -or [string]::IsNullOrEmpty([string]$raw)) {
+        return [pscustomobject]@{ outcome='failed'; material=$null; reasonCode='RESOLVER_ERROR'; summary='resolver returned no material' }
+    }
+    return [pscustomobject]@{ outcome='resolved'; material=$raw; reasonCode=$null; summary='resolver produced material' }
+}
+
 function Resolve-AgentCredentialReference {
     <#
     .SYNOPSIS
@@ -326,107 +381,31 @@ function Resolve-AgentCredentialReference {
         [int]$LifetimeSeconds = 300
     )
 
-    $refId = [string](Get-AgentCredentialResolverField $Reference 'reference')
-    if ([string]::IsNullOrEmpty($refId)) { $refId = [string]$Reference }
-
-    $raw = $null
-    $throwCode = $null
-    try {
-        $raw = & $Resolver $Reference
-    }
-    catch {
-        $throwCode = 'RESOLVER_ERROR'
-    }
-
-    if ($null -ne $throwCode) {
+    # Delegate to the single shared resolver-semantics interpreter. The public outcome never carries
+    # raw material; the runtime-private material is dropped here by design.
+    $r = Invoke-AgentCredentialResolverMaterial -Reference $Reference -Resolver $Resolver -EnvironmentVariable $EnvironmentVariable -LifetimeSeconds $LifetimeSeconds
+    if ($r.outcome -eq 'resolved') {
         return [PSCustomObject]@{
             contractVersion = '0.5.0'
             resolverId      = $ResolverId
             provider        = $Provider
-            outcome         = 'failed'
-            reasonCode      = $throwCode
+            outcome         = 'resolved'
+            reasonCode      = $null
             materialKind    = 'value'
-            target          = $null
-            lifetimeSeconds = $null
-            summary         = 'resolver threw an exception'
+            target          = $(if ($null -eq $EnvironmentVariable) { $null } else { [string]$EnvironmentVariable })
+            lifetimeSeconds = $LifetimeSeconds
+            summary         = 'resolver produced material'
         }
     }
-
-    # Typed resolver outcome object: only `outcome` and `reasonCode` are read, for validation.
-    # summary/target/materialKind/lifetimeSeconds from the callback are never trusted or propagated.
-    $typed = $raw.PSObject.Properties['outcome']
-    if ($null -ne $typed -and $null -ne $raw) {
-        $typedOutcome = [string]$raw.outcome
-        $typedReason = [string](Get-AgentCredentialResolverField $raw 'reasonCode')
-        $allowedReasonCodes = Get-AgentCredentialResolverAllowedReasonCodes
-        $reasonCode = $null
-        if (-not [string]::IsNullOrEmpty($typedReason)) {
-            if ($allowedReasonCodes -contains $typedReason) { $reasonCode = $typedReason }
-            else { $reasonCode = 'RESOLVER_ERROR' }
-        }
-        if ($typedOutcome -notin @('resolved','unavailable','failed')) {
-            return [PSCustomObject]@{
-                contractVersion = '0.5.0'
-                resolverId      = $ResolverId
-                provider        = $Provider
-                outcome         = 'failed'
-                reasonCode      = 'RESOLVER_ERROR'
-                materialKind    = 'value'
-                target          = $null
-                lifetimeSeconds = $null
-                summary         = 'resolver returned an invalid typed outcome'
-            }
-        }
-        if ($typedOutcome -eq 'resolved') {
-            return [PSCustomObject]@{
-                contractVersion = '0.5.0'
-                resolverId      = $ResolverId
-                provider        = $Provider
-                outcome         = 'resolved'
-                reasonCode      = $null
-                materialKind    = 'value'
-                target          = $(if ($null -eq $EnvironmentVariable) { $null } else { [string]$EnvironmentVariable })
-                lifetimeSeconds = $LifetimeSeconds
-                summary         = 'resolver produced material'
-            }
-        }
-        return [PSCustomObject]@{
-            contractVersion = '0.5.0'
-            resolverId      = $ResolverId
-            provider        = $Provider
-            outcome         = $typedOutcome
-            reasonCode      = $(if ($null -eq $reasonCode) { 'RESOLVER_ERROR' } else { $reasonCode })
-            materialKind    = 'value'
-            target          = $null
-            lifetimeSeconds = $null
-            summary         = 'resolver did not produce material'
-        }
-    }
-
-    if ($null -eq $raw -or [string]::IsNullOrEmpty([string]$raw)) {
-        return [PSCustomObject]@{
-            contractVersion = '0.5.0'
-            resolverId      = $ResolverId
-            provider        = $Provider
-            outcome         = 'failed'
-            reasonCode      = 'RESOLVER_ERROR'
-            materialKind    = 'value'
-            target          = $null
-            lifetimeSeconds = $null
-            summary         = 'resolver returned no material'
-        }
-    }
-
-    # Resolved: metadata only. The raw value never enters this object.
     return [PSCustomObject]@{
         contractVersion = '0.5.0'
         resolverId      = $ResolverId
         provider        = $Provider
-        outcome         = 'resolved'
-        reasonCode      = $null
+        outcome         = $r.outcome
+        reasonCode      = $r.reasonCode
         materialKind    = 'value'
-        target          = $(if ($null -eq $EnvironmentVariable) { $null } else { [string]$EnvironmentVariable })
-        lifetimeSeconds = $LifetimeSeconds
-        summary         = 'resolver produced material'
+        target          = $null
+        lifetimeSeconds = $null
+        summary         = $r.summary
     }
 }
