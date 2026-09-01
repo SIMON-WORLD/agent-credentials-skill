@@ -1,0 +1,11 @@
+{
+  "contractVersion": "0.5.0",
+  "resolverId": "external-broker",
+  "provider": "github",
+  "outcome": "failed",
+  "reasonCode": "RESOLVER_ERROR",
+  "materialKind": "token-handle",
+  "target": null,
+  "lifetimeSeconds": null,
+  "summary": "resolver infrastructure failure"
+}

@@ -1,0 +1,11 @@
+{
+  "contractVersion": "0.5.0",
+  "resolverId": "env",
+  "resolverType": "environment",
+  "supportedProviders": [],
+  "supportedSourceTypes": [],
+  "supportedHosts": [],
+  "supportedProfiles": [],
+  "capabilities": ["resolve"],
+  "runtimeRequirements": {}
+}

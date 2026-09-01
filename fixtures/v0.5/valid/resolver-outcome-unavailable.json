@@ -1,0 +1,11 @@
+{
+  "contractVersion": "0.5.0",
+  "resolverId": "keyring",
+  "provider": "npm",
+  "outcome": "unavailable",
+  "reasonCode": "CREDENTIAL_SOURCE_UNAVAILABLE",
+  "materialKind": "token-handle",
+  "target": null,
+  "lifetimeSeconds": null,
+  "summary": "credential source unavailable"
+}

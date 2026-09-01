@@ -196,6 +196,38 @@ Broker CLI（`scripts/broker.ps1`）：
 
 > 当前架构/版本：**v0.4.0**（Credential Broker / ExecutionPlan）；v0.1 / v0.2 / v0.3 行为保持向后兼容。（v0.3.0 历史 tag/Release 仍指向 main=7ff474f。）
 
+## v0.5 Credential Resolver（引用 → 运行时私有凭据）
+
+定位：把「已选逻辑引用 → 运行时私有凭据」这一缝隙正式化为契约，与 v0.2 / v0.3 / v0.4 解耦。
+
+Agent 必须遵守的规则：
+
+1. **计划所选引用就是权威**：resolver 只解析计划里那一条逻辑 `CredentialReference`；它绝不二次选账号/profile/引用，绝不回退，绝不放宽 host/profile/account 约束。
+2. **raw 凭据是运行时私有的**：`CredentialMaterial` 只瞬态存在于执行边界内，绝不序列化、记录、持久化、缓存，也绝不出现在任何公共结果里。
+3. **resolver 选择 ≠ 凭据选择**：`ResolverDescriptor` 能力匹配是纯函数，与凭据选择分离；`Select-AgentCredentialResolver` 只回答「哪个 resolver 能解析这条引用」，且 fail-closed（零匹配/多匹配/不兼容 → 拒绝，绝不按数组顺序取默认）。
+4. **PowerShell 是参考实现，不是协议**：`[scriptblock]` resolver 回调与 `scripts/core/execution.ps1` 只是 PowerShell 运行时绑定；协议（`ResolverDescriptor` / `ResolverOutcome` / 匹配规则 / fail-closed 语义）运行时中立，未来可用 Python/Node/Rust/Go 实现而不改公共契约。
+5. **resolver 不自动认证**：`INTERACTIVE_AUTH` / `reauthRequired` 仍是决策标记，不是认证触发。
+6. **provider 适配器 ≠ resolver 实现**：`scripts/providers/*` 是发现/适配；resolver 是「把引用解析成私有凭据」的能力，二者不混同。
+
+公共契约文件：
+
+- `schema/credential-resolver.schema.json`（`contractVersion 0.5.0`；只含 `ResolverDescriptor` 与 `ResolverOutcome`，**不含**任何 raw `CredentialMaterial`）。
+- `scripts/validate-resolver.ps1`（校验 descriptor / outcome，且拒绝任何 secret 字段名/值）。
+- `fixtures/v0.5/{valid,invalid}/...`（契约样例）。
+- `scripts/core/resolver.ps1`（纯匹配 + 运行时私有绑定参考实现）。
+
+Broker 用法（可选 resolver 能力门禁；语义向后兼容，不传 descriptor 仍走原有回调）：
+
+```powershell
+# 传入 resolver 描述符后，-Execute 前先做 fail-closed 匹配；未命中绝不调用 resolver/子进程。
+.\scripts\broker.ps1 -Provider github -Operation push -DiagnosisJson '{"status":"healthy"}' -ReferencesJson '[{"provider":"github","sourceType":"cli","reference":"cli/github.com/alice","account":"alice","profile":"personal","host":"github.com"}]' -ResolverDescriptorsJson '[{"contractVersion":"0.5.0","resolverId":"cli","resolverType":"cli-session","supportedProviders":["github"],"supportedSourceTypes":["cli"],"supportedHosts":[],"supportedProfiles":[],"capabilities":["resolve"],"runtimeRequirements":{}}]' -Execute -Executable 'git' -EnvironmentVariable 'GH_TOKEN' -CredentialResolver { param($r) <返回原始值> }
+
+# 指定必须使用哪个 resolver；不匹配即 fail closed。
+.\scripts\broker.ps1 ... -ResolverDescriptorsJson '[...]' -ResolverRequestedId 'cli' -Execute ...
+```
+
+`docs/rfc-v0.5-credential-resolver.md` 记录完整架构与信任边界；`.machine-tokens` 只是参考存储约定，**不是**协议要求（可移植 resolver 不得假设 `%USERPROFILE%\.machine-tokens\` 这样的文件路径）。
+
 ## License
 
 MIT，见 [LICENSE](LICENSE)。

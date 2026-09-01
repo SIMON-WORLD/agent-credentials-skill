@@ -1,0 +1,11 @@
+{
+  "contractVersion": "0.5.0",
+  "resolverId": "file",
+  "resolverType": "file",
+  "supportedProviders": ["pypi"],
+  "supportedSourceTypes": ["file"],
+  "supportedHosts": ["upload.pypi.org"],
+  "supportedProfiles": [],
+  "capabilities": ["resolve"],
+  "runtimeRequirements": { "powershell": "5.1+", "os-keyring": false }
+}

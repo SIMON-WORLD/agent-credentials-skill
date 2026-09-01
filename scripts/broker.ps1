@@ -31,6 +31,9 @@ param(
     [string]$ReferencesJson = $null,
     [object[]]$Observations = @(),
     [string]$ObservationsJson = $null,
+    [object[]]$ResolverDescriptors = @(),
+    [string]$ResolverDescriptorsJson = $null,
+    [string]$ResolverRequestedId = $null,
     [switch]$Execute,
     [string]$Executable = $null,
     [string[]]$ArgumentList = @(),
@@ -50,6 +53,7 @@ $repoRoot = Split-Path -Path $scriptRoot -Parent
 . (Join-Path $repoRoot 'scripts\core\plan.ps1')
 . (Join-Path $repoRoot 'scripts\core\execution.ps1')
 . (Join-Path $repoRoot 'scripts\core\broker-execution.ps1')
+. (Join-Path $repoRoot 'scripts\core\resolver.ps1')
 . (Join-Path $repoRoot 'scripts\providers\github-context.ps1')
 . (Join-Path $repoRoot 'scripts\providers\npm-context.ps1')
 
@@ -67,6 +71,7 @@ if ($null -ne $Diagnosis) { $diagCode = $Diagnosis.PSObject.Properties['code']; 
 
 if ($ReferencesJson) { $References = @($ReferencesJson | ConvertFrom-Json) }
 if ($ObservationsJson) { $Observations = @($ObservationsJson | ConvertFrom-Json) }
+if ($ResolverDescriptorsJson) { $ResolverDescriptors = @($ResolverDescriptorsJson | ConvertFrom-Json) }
 
 # --- provider adapter / reference input (observations -> references; never resolves raw) ---
 $available = @($References | Where-Object { $null -ne $_ })
@@ -134,6 +139,15 @@ if ($Execute) {
     if ([string]::IsNullOrEmpty($Executable)) { Write-BrokerError 'executable is required for -Execute' }
     if ($null -eq $CredentialResolver) { Write-BrokerError 'a credential resolver is required for -Execute' }
     if ($EnvironmentVariable -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { Write-BrokerError 'invalid credential environment-variable name for -Execute' }
+    # v0.5 resolver-capability gate: when resolver descriptors are supplied, fail closed before any
+    # raw credential resolution if the matcher cannot select exactly one compatible resolver.
+    if ($plan.gate -eq 'ready' -and $null -ne $plan.selectedCredentialReference -and $ResolverDescriptors.Count -gt 0) {
+        $verdict = Select-AgentCredentialResolver -Reference $plan.selectedCredentialReference -Descriptors $ResolverDescriptors -RequestedId $ResolverRequestedId
+        if ($verdict.status -ne 'matched') {
+            $failOutcome = ConvertTo-AgentCredentialResolverFailClosedOutcome -Verdict $verdict -ResolverId $ResolverRequestedId -Provider $Provider
+            Write-BrokerError ('resolver selection failed closed: ' + $failOutcome.reasonCode + ' :: ' + $failOutcome.summary)
+        }
+    }
     $execResult = Invoke-AgentCredentialExecutionPlan -ExecutionPlan $plan -Executable $Executable -ArgumentList $ArgumentList -EnvironmentVariable $EnvironmentVariable -Resolver $CredentialResolver -TimeoutSeconds $TimeoutSeconds
     if ($Json) {
         $execResult | ConvertTo-Json -Depth 8

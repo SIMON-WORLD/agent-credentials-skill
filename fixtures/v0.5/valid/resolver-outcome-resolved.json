@@ -1,0 +1,11 @@
+{
+  "contractVersion": "0.5.0",
+  "resolverId": "env",
+  "provider": "github",
+  "outcome": "resolved",
+  "reasonCode": null,
+  "materialKind": "value",
+  "target": "GH_TOKEN",
+  "lifetimeSeconds": 300,
+  "summary": "resolver produced material"
+}

@@ -52,3 +52,14 @@
 - **适配器不拥有执行期的 raw 秘密解析**：raw 值只经调用方 resolver 在进程作用域执行边界内瞬时存在。
 
 > 当前架构/版本：**v0.4.0**（Credential Broker / ExecutionPlan）；v0.1 / v0.2 / v0.3 行为保持向后兼容。（v0.3.0 历史 tag/Release 仍指向 main=7ff474f。）
+
+## v0.5 Resolver 边界与版本说明（当前版本 v0.5.0，resolver 层）
+
+- **provider 适配器 ≠ resolver 实现**：`scripts/providers/*` 负责「发现/把已消毒观察转成逻辑引用」；v0.5 `scripts/core/resolver.ps1` 的 `Select-AgentCredentialResolver` 负责「对已选逻辑引用做能力匹配并 fail-closed」。二者不混同。
+- **resolver 不二次选凭据**：resolver 只解析 `ExecutionPlan.selectedCredentialReference` 那一条引用；账号/profile/host 约束由 v0.3/v0.4 决定，不在此层重新选择。
+- **raw 凭据是运行时私有的**：`CredentialMaterial` 不在任何公共 JSON 形状中（`schema/credential-resolver.schema.json` 只含 `ResolverDescriptor` / `ResolverOutcome`），绝不序列化/记录/持久化/缓存。
+- **PowerShell 是参考实现**：`[scriptblock]` resolver 回调与 `scripts/core/execution.ps1` 只是运行时绑定；协议（匹配规则、fail-closed、失败词汇）运行时中立。
+- **`.machine-tokens` 是参考约定，不是协议**：可移植 resolver 不得假设固定文件路径。
+- **resolver 不自动认证**：`INTERACTIVE_AUTH`/`reauthRequired` 仍是决策标记，不触发认证。
+
+> 当前架构/版本：**v0.5.0**（Credential Resolver / 运行时私有凭据）；v0.1 / v0.2 / v0.3 / v0.4 行为保持向后兼容。

@@ -166,3 +166,23 @@ Broker 用法（`scripts/broker.ps1`）：
 - Broker 不持久化/缓存/解析 raw 凭据；raw 值仅瞬时存在于执行边界子进程作用域。
 - 无默认 `gh auth switch` / `login`、`npm login` 或全局认证变更。
 - 当前架构/版本：**v0.4.0**（Credential Broker / ExecutionPlan）；v0.1 / v0.2 / v0.3 行为保持向后兼容。
+
+## v0.5 Credential Resolver（引用 → 运行时私有凭据）
+
+Agent 必须遵守的规则：
+
+1. **计划所选引用就是权威**：resolver 只解析计划里那一条逻辑 `CredentialReference`，绝不二次选账号/profile/引用，绝不回退、不放宽约束。
+2. **raw 凭据是运行时私有的**：`CredentialMaterial` 只瞬态存在于执行边界，绝不序列化/记录/持久化/缓存，也绝不出现在任何公共结果。
+3. **resolver 选择 ≠ 凭据选择**：能力匹配是纯函数（`Select-AgentCredentialResolver`），fail-closed；零匹配/多匹配/不兼容一律拒绝，绝不按数组顺序取默认。
+4. **PowerShell 是参考实现，不是协议**：`[scriptblock]` resolver 与 `scripts/core/execution.ps1` 只是运行时绑定；协议运行时中立，未来可用其他语言实现而不改公共契约。
+5. **resolver 不自动认证**：`INTERACTIVE_AUTH`/`reauthRequired` 仍是决策标记，不触发认证。
+6. **provider 适配器 ≠ resolver 实现**：`scripts/providers/*` 发现/适配；resolver 是「把引用解析成私有凭据」的能力。
+7. **`.machine-tokens` 只是参考存储约定**，不是协议要求；可移植 resolver 不得假设固定文件路径。
+
+公共契约：`schema/credential-resolver.schema.json`（`0.5.0`，只含 `ResolverDescriptor` / `ResolverOutcome`，不含 raw `CredentialMaterial`）、`scripts/validate-resolver.ps1`、`fixtures/v0.5/...`、`scripts/core/resolver.ps1`（纯匹配 + 运行时私有参考绑定）。
+
+Broker 可选 resolver 能力门禁（向后兼容；不传 descriptor 仍走原有回调）：
+
+```powershell
+.\scripts\broker.ps1 -Provider github -Operation push -DiagnosisJson '{"status":"healthy"}' -ReferencesJson '[...]' -ResolverDescriptorsJson '[...]' -Execute -Executable 'git' -EnvironmentVariable 'GH_TOKEN' -CredentialResolver { param($r) <原始值> }
+```

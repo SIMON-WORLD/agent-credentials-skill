@@ -23,12 +23,14 @@ $ErrorActionPreference = 'Stop'
 $script:repoRoot = if ($RepoRoot) { $RepoRoot } else { Split-Path -Path $PSScriptRoot -Parent }
 $script:scriptsDir = Join-Path $script:repoRoot 'scripts'
 $script:planCore = Join-Path $script:scriptsDir 'core\plan.ps1'
+$script:resolverCore = Join-Path $script:scriptsDir 'core\resolver.ps1'
 $script:validatePlan = Join-Path $script:scriptsDir 'validate-plan.ps1'
 $script:schemaFile = Join-Path $script:repoRoot 'schema\credential-plan.schema.json'
 $script:v04Valid = Join-Path $script:repoRoot 'fixtures\v0.4\valid'
 $script:v04Invalid = Join-Path $script:repoRoot 'fixtures\v0.4\invalid'
 
 . $script:planCore
+. $script:resolverCore
 
 $script:results = New-Object System.Collections.Generic.List[object]
 
@@ -715,7 +717,6 @@ Invoke-Test 'UX2 exact-plan authority' {
     Assert-True ($r2.outcome -eq 'executed' -and $planRef -eq 'env/EXAMPLE_TOKEN') "out=$($r2.outcome)"
 }
 
-# Security invariants via real CLI/source.
 Invoke-Test 'UX3 no raw persistence/cache' {
     $src = Get-Content -Raw -LiteralPath $script:brokerCli
     Assert-True (($src -notmatch 'Add-Content') -and ($src -notmatch 'Out-File') -and ($src -notmatch 'Set-Content')) 'persistence op'
@@ -724,6 +725,164 @@ Invoke-Test 'UX4 provider-neutral execution branch' {
     $src = Get-Content -Raw -LiteralPath $script:brokerCli
     $codeLines = Get-Content -LiteralPath $script:brokerCli -Encoding UTF8 | Where-Object { $t = $_.Trim(); $t -notlike '#*' -and $t -notlike '<#*' -and $t -notlike '*#>' }
     Assert-True (-not (($codeLines -join "`n") -match 'github.*npm.*branch|switch.*provider')) 'branch in broker exec'
+}
+
+# --- v0.5 Credential Resolver contract + matcher + runtime-private binding (R-tests) ---
+$descEnv = '{"contractVersion":"0.5.0","resolverId":"env","resolverType":"environment","supportedProviders":[],"supportedSourceTypes":["env"],"supportedHosts":[],"supportedProfiles":[],"capabilities":["resolve"],"runtimeRequirements":{}}'
+$descEnv2 = '{"contractVersion":"0.5.0","resolverId":"env2","resolverType":"environment","supportedProviders":[],"supportedSourceTypes":["env"],"supportedHosts":[],"supportedProfiles":[],"capabilities":["resolve"],"runtimeRequirements":{}}'
+$descCli = '{"contractVersion":"0.5.0","resolverId":"cli","resolverType":"cli-session","supportedProviders":["github"],"supportedSourceTypes":["cli"],"supportedHosts":[],"supportedProfiles":[],"capabilities":["resolve"],"runtimeRequirements":{}}'
+$refCli = @{ provider = 'github'; sourceType = 'cli'; reference = 'cli/github.com/alice'; account = 'alice'; profile = 'personal'; host = 'github.com' }
+
+function Run-BrokerRes($provider, $op, $diag, $refs, $descsJson, $requestedId, $exe, $arglit, $envVar, $resolverText, $timeout = 0) {
+    $dir = Join-Path $env:TEMP ('v05res-' + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Path $dir | Out-Null
+    $got = Join-Path $dir 'got.txt'; $rf = Join-Path $dir 'resolver.ps1'; $df = Join-Path $dir 'descs.json'; $runner = Join-Path $dir 'runner.ps1'
+    [System.IO.File]::WriteAllText($rf, ($resolverText.Replace('@GOT@', $got)), [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($df, $descsJson, [System.Text.UTF8Encoding]::new($false))
+    $req = if ($requestedId) { " -ResolverRequestedId '" + $requestedId + "'" } else { '' }
+    $runnerText = "`$resolver=[scriptblock]::Create((Get-Content -Raw '" + $rf + "'))`r`n& '" + $script:brokerCli + "' -Execute -Provider '" + $provider + "' -Operation '" + $op + "' -DiagnosisJson '" + $diag + "' -ReferencesJson '" + $refs + "' -ResolverDescriptorsJson (Get-Content -Raw '" + $df + "')" + $req + " -Executable '" + $exe + "'" + $(if ($arglit) { " -ArgumentList @(" + $arglit + ")" }) + " -EnvironmentVariable '" + $envVar + "' -CredentialResolver `$resolver -TimeoutSeconds " + $timeout + "`r`n" + 'exit $LASTEXITCODE'
+    [System.IO.File]::WriteAllText($runner, $runnerText, [System.Text.UTF8Encoding]::new($false))
+    $out = & pwsh -NoProfile -File $runner 2>&1
+    $gotVal = ''; if (Test-Path $got) { $gotVal = (Get-Content -Raw $got).Trim() }
+    Remove-Item -LiteralPath $dir -Recurse -Force
+    return @{ exit = $LASTEXITCODE; out = ($out -join "`n"); got = $gotVal }
+}
+
+Invoke-Test 'R1 compatible resolver + exact ref -> execute' {
+    $descs = '[' + $descCli + ']'
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R1')) 'ACS_R1' $execResNormal
+    Assert-True ($r.exit -eq 0) ("exit=$($r.exit) out=$($r.out)")
+    Assert-True ($r.out -match 'outcome: executed') ("out=$($r.out)")
+}
+Invoke-Test 'R2 resolver receives exact logical ref' {
+    $descs = '[' + $descCli + ']'
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R2')) 'ACS_R2' $execResNormal
+    Assert-True ($r.got -eq 'cli/github.com/alice') ("resolver got ref=$($r.got)")
+}
+Invoke-Test 'R3 zero compatible -> fail closed before raw' {
+    $descs = '[' + $descEnv + ']'
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R3')) 'ACS_R3' $execResNormal
+    Assert-True ($r.exit -ne 0) ("exit=$($r.exit) out=$($r.out)")
+    Assert-True ($r.got -eq '') "resolver ran despite fail closed (got=$($r.got))"
+    Assert-True ($r.out -match 'resolver selection failed closed') ("out=$($r.out)")
+}
+Invoke-Test 'R4 multiple compatible -> fail closed before raw' {
+    $descs = '[' + $descEnv + ',' + $descEnv2 + ']'
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs $null 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R4')) 'ACS_R4' $execResNormal
+    Assert-True ($r.exit -ne 0) "exit=$($r.exit) out=$($r.out)"
+    Assert-True ($r.got -eq '') "resolver ran despite fail closed (got=$($r.got))"
+    Assert-True ($r.out -match 'resolver selection failed closed') ("out=$($r.out)")
+}
+Invoke-Test 'R5 explicit incompatible -> fail closed' {
+    $descs = '[' + $descCli + ']'
+    $r = Run-BrokerRes 'github' 'push' $diagH $ghOne $descs 'env' 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R5')) 'ACS_R5' $execResNormal
+    Assert-True ($r.exit -ne 0) "exit=$($r.exit) out=$($r.out)"
+    Assert-True ($r.got -eq '') "resolver ran despite fail closed (got=$($r.got))"
+}
+Invoke-Test 'R6 reversed array order -> same result' {
+    $ref = [pscustomobject]$refCli
+    $d1 = @(($descCli | ConvertFrom-Json), ($descEnv | ConvertFrom-Json))
+    $d2 = @(($descEnv | ConvertFrom-Json), ($descCli | ConvertFrom-Json))
+    $v1 = Select-AgentCredentialResolver -Reference $ref -Descriptors $d1
+    $v2 = Select-AgentCredentialResolver -Reference $ref -Descriptors $d2
+    Assert-True ($v1.status -eq $v2.status) ("status $($v1.status) != $($v2.status)")
+    Assert-True ($v1.resolver.resolverId -eq $v2.resolver.resolverId) 'resolverId changed'
+}
+Invoke-Test 'R7 provider mismatch rejected' {
+    $refNpm = [pscustomobject]@{ provider = 'npm'; sourceType = 'cli'; reference = 'cli/npm/alice'; account = $null; profile = $null; host = $null }
+    $v = Select-AgentCredentialResolver -Reference $refNpm -Descriptors @($descCli | ConvertFrom-Json)
+    Assert-True ($v.status -eq 'no_match') ("status=$($v.status)")
+}
+Invoke-Test 'R8 sourceType mismatch rejected' {
+    $refFile = [pscustomobject]@{ provider = 'github'; sourceType = 'file'; reference = 'file/github'; account = $null; profile = $null; host = $null }
+    $v = Select-AgentCredentialResolver -Reference $refFile -Descriptors @($descEnv | ConvertFrom-Json)
+    Assert-True ($v.status -eq 'no_match' -and $v.reasonCode -eq 'CREDENTIAL_SOURCE_UNAVAILABLE') ("status=$($v.status) code=$($v.reasonCode)")
+}
+Invoke-Test 'R9 host/profile constraints respected' {
+    $descHost = '{"contractVersion":"0.5.0","resolverId":"gh-personal","resolverType":"cli-session","supportedProviders":["github"],"supportedSourceTypes":["cli"],"supportedHosts":["github.com"],"supportedProfiles":["personal"],"capabilities":["resolve"],"runtimeRequirements":{}}'
+    $ok = Select-AgentCredentialResolver -Reference ([pscustomobject]$refCli) -Descriptors @($descHost | ConvertFrom-Json)
+    Assert-True ($ok.status -eq 'matched') ("status=$($ok.status)")
+    $badRef = [pscustomobject]@{ provider = 'github'; sourceType = 'cli'; reference = 'cli/github.com/bob'; account = 'bob'; profile = 'work'; host = 'github.com' }
+    $bad = Select-AgentCredentialResolver -Reference $badRef -Descriptors @($descHost | ConvertFrom-Json)
+    Assert-True ($bad.status -eq 'no_match') ("status=$($bad.status)")
+}
+Invoke-Test 'R10 resolver cannot cause second selection' {
+    $ref = [pscustomobject]@{ provider = 'github'; sourceType = 'env'; reference = 'env/GH_TOKEN'; account = 'alice'; profile = 'personal'; host = 'github.com' }
+    $before = $ref.reference
+    $resolver = [scriptblock]::Create("param(`$r) return [pscustomobject]@{ outcome='failed'; reasonCode='CREDENTIAL_NOT_FOUND'; selectedReference='env/DIFFERENT'; reference='env/DIFFERENT' }")
+    $outcome = Resolve-AgentCredentialReference -Reference $ref -Resolver $resolver -ResolverId 'env'
+    Assert-True ($ref.reference -eq $before) 'reference mutated'
+    Assert-True ($null -eq $outcome.PSObject.Properties['selectedReference'] -and $null -eq $outcome.PSObject.Properties['reference']) 'outcome exposed second reference'
+}
+Invoke-Test 'R11 resolver exception -> sanitized RESOLVER_ERROR' {
+    $ref = [pscustomobject]@{ provider = 'github'; sourceType = 'env'; reference = 'env/GH_TOKEN'; account = $null; profile = $null; host = $null }
+    $resolver = [scriptblock]::Create("param(`$r) throw ('boom ' + '$script:execSentinel')")
+    $outcome = Resolve-AgentCredentialReference -Reference $ref -Resolver $resolver -ResolverId 'env'
+    $json = $outcome | ConvertTo-Json -Depth 6
+    Assert-True ($outcome.outcome -eq 'failed' -and $outcome.reasonCode -eq 'RESOLVER_ERROR') ("out=$($outcome.outcome) code=$($outcome.reasonCode)")
+    Assert-True ($json -notlike ('*' + $script:execSentinel + '*')) 'exception text/sentinel leaked'
+    Assert-True ($json -notmatch 'boom') 'exception detail leaked'
+}
+Invoke-Test 'R12 CREDENTIAL_NOT_FOUND typed failure sanitized' {
+    $ref = [pscustomobject]@{ provider = 'pypi'; sourceType = 'file'; reference = 'file/pypi'; account = $null; profile = $null; host = $null }
+    $resolver = [scriptblock]::Create("param(`$r) return [pscustomobject]@{ outcome='failed'; reasonCode='CREDENTIAL_NOT_FOUND'; summary='not found' }")
+    $outcome = Resolve-AgentCredentialReference -Reference $ref -Resolver $resolver -ResolverId 'file'
+    Assert-True ($outcome.outcome -eq 'failed' -and $outcome.reasonCode -eq 'CREDENTIAL_NOT_FOUND') ("out=$($outcome.outcome) code=$($outcome.reasonCode)")
+}
+Invoke-Test 'R13 TOKEN_SCOPE_INSUFFICIENT typed failure sanitized' {
+    $ref = [pscustomobject]@{ provider = 'github'; sourceType = 'env'; reference = 'env/GH_TOKEN'; account = $null; profile = $null; host = $null }
+    $resolver = [scriptblock]::Create("param(`$r) return [pscustomobject]@{ outcome='failed'; reasonCode='TOKEN_SCOPE_INSUFFICIENT'; summary='scope' }")
+    $outcome = Resolve-AgentCredentialReference -Reference $ref -Resolver $resolver -ResolverId 'env'
+    Assert-True ($outcome.outcome -eq 'failed' -and $outcome.reasonCode -eq 'TOKEN_SCOPE_INSUFFICIENT') ("out=$($outcome.outcome) code=$($outcome.reasonCode)")
+}
+Invoke-Test 'R14 raw sentinel never in public resolver outcome' {
+    $ref = [pscustomobject]@{ provider = 'github'; sourceType = 'env'; reference = 'env/GH_TOKEN'; account = $null; profile = $null; host = $null }
+    $resolver = [scriptblock]::Create("param(`$r) return '$script:execSentinel'")
+    $outcome = Resolve-AgentCredentialReference -Reference $ref -Resolver $resolver -ResolverId 'env' -EnvironmentVariable 'GH_TOKEN'
+    $json = $outcome | ConvertTo-Json -Depth 6
+    Assert-True ($outcome.outcome -eq 'resolved') ("out=$($outcome.outcome)")
+    Assert-True ($json -notlike ('*' + $script:execSentinel + '*')) 'raw sentinel leaked into public outcome'
+}
+Invoke-Test 'R15 raw sentinel never in ExecutionPlan' {
+    $refs = '[{"provider":"github","sourceType":"cli","reference":"cli/github.com/alice","account":"alice","profile":"personal","host":"github.com","rawToken":"' + $script:execSentinel + '"}]'
+    $r = Run-Broker @('-Provider','github','-Operation','push','-DiagnosisJson',$diagH,'-ReferencesJson',$refs,'-Json')
+    Assert-True ($r.exit -eq 0) "exit=$($r.exit) out=$($r.out)"
+    Assert-True ($r.out -notlike ('*' + $script:execSentinel + '*')) 'raw sentinel leaked into plan'
+}
+Invoke-Test 'R16 raw sentinel never in Broker/execution result' {
+    $r = Run-BrokerExec 'github' 'push' $diagH $ghOne 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R16')) 'ACS_R16' $execResNormal 0 ''
+    Assert-True ($r.out -notlike ('*' + $script:execSentinel + '*')) 'raw sentinel leaked into broker result'
+}
+Invoke-Test 'R17 parent env unchanged' {
+    $envVar = 'ACS_R17'
+    $null = Run-BrokerExec 'github' 'push' $diagH $ghOne 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript $envVar)) $envVar $execResNormal
+    $present = Get-Item -Path ('env:' + $envVar) -ErrorAction SilentlyContinue
+    Assert-True ($null -eq $present) "parent env leaked $envVar"
+}
+Invoke-Test 'R18 no login/reauth/switch/global mutation' {
+    $src = (Get-Content -Raw -LiteralPath $script:brokerCli) + (Get-Content -Raw -LiteralPath $script:resolverCore)
+    foreach ($bad in @('gh auth login','gh auth switch','npm login','npm logout','Add-Content','Out-File','Start-Process','Invoke-Expression','ConvertFrom-SecureString','Read-Host')) {
+        Assert-True (-not ($src -match [regex]::Escape($bad))) ("bad token $bad")
+    }
+}
+Invoke-Test 'R19 example-provider/GitHub/npm identical Core matcher' {
+    $desc = $descEnv | ConvertFrom-Json
+    $refs = @(
+        [pscustomobject]@{ provider = 'example-provider'; sourceType = 'env'; reference = 'env/EX'; account = $null; profile = $null; host = $null },
+        [pscustomobject]@{ provider = 'github'; sourceType = 'env'; reference = 'env/GH'; account = $null; profile = $null; host = $null },
+        [pscustomobject]@{ provider = 'npm'; sourceType = 'env'; reference = 'env/NPM'; account = $null; profile = $null; host = $null }
+    )
+    $statuses = @($refs | ForEach-Object { (Select-AgentCredentialResolver -Reference $_ -Descriptors @($desc)).status })
+    Assert-True (($statuses | Select-Object -Unique).Count -eq 1) ("statuses differ: $($statuses -join ',')")
+}
+Invoke-Test 'R20 repeated identical inputs deterministic' {
+    $ref = [pscustomobject]$refCli
+    $d = @($descCli | ConvertFrom-Json)
+    $a = Select-AgentCredentialResolver -Reference $ref -Descriptors $d
+    $b = Select-AgentCredentialResolver -Reference $ref -Descriptors $d
+    Assert-True ($a.status -eq $b.status -and $a.resolver.resolverId -eq $b.resolver.resolverId) 'matcher not deterministic'
+    $j1 = (Run-Broker @('-Provider','github','-Operation','push','-DiagnosisJson',$diagH,'-ReferencesJson',$ghOne,'-Json')).out
+    $j2 = (Run-Broker @('-Provider','github','-Operation','push','-DiagnosisJson',$diagH,'-ReferencesJson',$ghOne,'-Json')).out
+    Assert-True ($j1 -eq $j2) 'broker plan not deterministic'
 }
 
 $failures = @($script:results | Where-Object { -not $_.ok })

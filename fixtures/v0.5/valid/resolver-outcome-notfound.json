@@ -1,0 +1,11 @@
+{
+  "contractVersion": "0.5.0",
+  "resolverId": "file",
+  "provider": "pypi",
+  "outcome": "failed",
+  "reasonCode": "CREDENTIAL_NOT_FOUND",
+  "materialKind": "file-path",
+  "target": null,
+  "lifetimeSeconds": null,
+  "summary": "credential not found"
+}
