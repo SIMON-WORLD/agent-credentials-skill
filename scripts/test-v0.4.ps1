@@ -589,7 +589,7 @@ function Run-BrokerExec($provider, $op, $diag, $refs, $exe, $arglit, $envVar, $r
     $dir = Join-Path $env:TEMP ('v04pe-'+[guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Path $dir | Out-Null
     $got = Join-Path $dir 'got.txt'; $rf = Join-Path $dir 'resolver.ps1'; $runner = Join-Path $dir 'runner.ps1'
     [System.IO.File]::WriteAllText($rf, ($resolverText.Replace('@GOT@', $got)), [System.Text.UTF8Encoding]::new($false))
-    $runnerText = "`$resolver=[scriptblock]::Create((Get-Content -Raw '" + $rf + "'))`r`n& '" + $script:brokerCli + "' -Execute -Provider '" + $provider + "' -Operation '" + $op + "' -DiagnosisJson '" + $diag + "' -ReferencesJson '" + $refs + "' -Executable '" + $exe + "'" + $(if ($arglit) { " -ArgumentList @(" + $arglit + ")" }) + " -EnvironmentVariable '" + $envVar + "' -CredentialResolver `$resolver -TimeoutSeconds " + $timeout + $extra
+    $runnerText = "`$resolver=[scriptblock]::Create((Get-Content -Raw '" + $rf + "'))`r`n& '" + $script:brokerCli + "' -Execute -Provider '" + $provider + "' -Operation '" + $op + "' -DiagnosisJson '" + $diag + "' -ReferencesJson '" + $refs + "' -Executable '" + $exe + "'" + $(if ($arglit) { " -ArgumentList @(" + $arglit + ")" }) + " -EnvironmentVariable '" + $envVar + "' -CredentialResolver `$resolver -TimeoutSeconds " + $timeout + $extra + "`r`n" + 'exit $LASTEXITCODE'
     [System.IO.File]::WriteAllText($runner, $runnerText, [System.Text.UTF8Encoding]::new($false))
     $out = & pwsh -NoProfile -File $runner 2>&1
     $gotVal = ''; if (Test-Path $got) { $gotVal = (Get-Content -Raw $got).Trim() }
@@ -883,6 +883,81 @@ Invoke-Test 'R20 repeated identical inputs deterministic' {
     $j1 = (Run-Broker @('-Provider','github','-Operation','push','-DiagnosisJson',$diagH,'-ReferencesJson',$ghOne,'-Json')).out
     $j2 = (Run-Broker @('-Provider','github','-Operation','push','-DiagnosisJson',$diagH,'-ReferencesJson',$ghOne,'-Json')).out
     Assert-True ($j1 -eq $j2) 'broker plan not deterministic'
+}
+
+# --- v0.5 review-fix regressions (R21-R30) ---
+Invoke-Test 'R21 duplicate resolverId -> fail closed' {
+    $ref = [pscustomobject]$refCli
+    $d1 = $descCli | ConvertFrom-Json
+    $d2 = $descCli | ConvertFrom-Json
+    $v = Select-AgentCredentialResolver -Reference $ref -Descriptors @($d1,$d2)
+    Assert-True ($v.status -eq 'ambiguous' -and $null -eq $v.resolver) "status=$($v.status)"
+}
+Invoke-Test 'R22 duplicate requested resolverId -> fail closed' {
+    $ref = [pscustomobject]$refCli
+    $d1 = $descCli | ConvertFrom-Json
+    $d2 = $descCli | ConvertFrom-Json
+    $v = Select-AgentCredentialResolver -Reference $ref -Descriptors @($d1,$d2) -RequestedId 'cli'
+    Assert-True ($v.status -eq 'ambiguous') "status=$($v.status)"
+}
+Invoke-Test 'R23 wrong contractVersion descriptor -> no match' {
+    $ref = [pscustomobject]$refCli
+    $bad = $descCli | ConvertFrom-Json
+    $bad.contractVersion = '0.4.0'
+    $v = Select-AgentCredentialResolver -Reference $ref -Descriptors @($bad)
+    Assert-True ($v.status -eq 'no_match') "status=$($v.status)"
+}
+Invoke-Test 'R24 descriptor missing resolve capability -> no match' {
+    $ref = [pscustomobject]$refCli
+    $bad = $descCli | ConvertFrom-Json
+    $bad.capabilities = @('list')
+    $v = Select-AgentCredentialResolver -Reference $ref -Descriptors @($bad)
+    Assert-True ($v.status -eq 'no_match') "status=$($v.status)"
+}
+Invoke-Test 'R25 requested id without descriptors -> broker fail closed' {
+    $r = Run-BrokerExec 'github' 'push' $diagH $ghOne 'pwsh.exe' (ExecChildArgLit (ExecSentinelChildScript 'ACS_R25')) 'ACS_R25' $execResNormal 0 " -ResolverRequestedId 'cli'"
+    Assert-True ($r.exit -ne 0) "exit=$($r.exit) out=$($r.out)"
+    Assert-True ($r.got -eq '') "resolver ran: $($r.got)"
+    Assert-True ($r.out -match 'requested resolver id requires resolver descriptors') ("out=$($r.out)")
+}
+Invoke-Test 'R26 typed summary secret not leaked' {
+    $ref = [pscustomobject]@{ provider='github'; sourceType='env'; reference='env/GH_TOKEN'; account=$null; profile=$null; host=$null }
+    $resolver = [scriptblock]::Create("param(`$r) return [pscustomobject]@{outcome='failed';reasonCode='CREDENTIAL_NOT_FOUND';summary=('secret ' + `$script:execSentinel + ' path')}")
+    $outcome = Resolve-AgentCredentialReference -Reference $ref -Resolver $resolver -ResolverId 'env'
+    $json = $outcome | ConvertTo-Json -Depth 6
+    Assert-True ($json -notlike ('*'+$script:execSentinel+'*')) "leaked secret: $json"
+}
+Invoke-Test 'R27 typed target/metadata not propagated' {
+    $ref = [pscustomobject]@{ provider='github'; sourceType='env'; reference='env/GH_TOKEN'; account=$null; profile=$null; host=$null }
+    $resolver = [scriptblock]::Create("param(`$r) return [pscustomobject]@{outcome='failed';reasonCode='CREDENTIAL_NOT_FOUND';target='C:\\secret\\path';materialKind='file-path';lifetimeSeconds=999;summary=('secret ' + `$script:execSentinel)}")
+    $outcome = Resolve-AgentCredentialReference -Reference $ref -Resolver $resolver -ResolverId 'env'
+    $json = $outcome | ConvertTo-Json -Depth 6
+    Assert-True ($null -eq $outcome.target -and $outcome.materialKind -eq 'value' -and $null -eq $outcome.lifetimeSeconds) "target=$($outcome.target) kind=$($outcome.materialKind) life=$($outcome.lifetimeSeconds)"
+    Assert-True ($json -notmatch 'C:\\\\secret|secret\\\\path|file-path|999') "leaked: $json"
+    Assert-True ($json -notlike ('*'+$script:execSentinel+'*')) "leaked secret: $json"
+}
+Invoke-Test 'R28 invalid typed outcome sanitized' {
+    $ref = [pscustomobject]@{ provider='github'; sourceType='env'; reference='env/GH_TOKEN'; account=$null; profile=$null; host=$null }
+    $resolver = [scriptblock]::Create("param(`$r) return [pscustomobject]@{outcome='BANANA';reasonCode='CREDENTIAL_NOT_FOUND'}")
+    $outcome = Resolve-AgentCredentialReference -Reference $ref -Resolver $resolver -ResolverId 'env'
+    Assert-True ($outcome.outcome -eq 'failed' -and $outcome.reasonCode -eq 'RESOLVER_ERROR') "out=$($outcome.outcome) code=$($outcome.reasonCode)"
+}
+Invoke-Test 'R29 invalid typed reasonCode sanitized' {
+    $ref = [pscustomobject]@{ provider='github'; sourceType='env'; reference='env/GH_TOKEN'; account=$null; profile=$null; host=$null }
+    $resolver = [scriptblock]::Create("param(`$r) return [pscustomobject]@{outcome='failed';reasonCode='BOGUS'}")
+    $outcome = Resolve-AgentCredentialReference -Reference $ref -Resolver $resolver -ResolverId 'env'
+    Assert-True ($outcome.outcome -eq 'failed' -and $outcome.reasonCode -eq 'RESOLVER_ERROR') "out=$($outcome.outcome) code=$($outcome.reasonCode)"
+}
+Invoke-Test 'R30 reversing duplicate/mixed descriptors cannot change verdict' {
+    $ref = [pscustomobject]$refCli
+    $d1 = $descCli | ConvertFrom-Json
+    $d2 = $descCli | ConvertFrom-Json
+    $envD = $descEnv | ConvertFrom-Json
+    $fwd = @($d1, $d2, $envD)
+    $rev = @($envD, $d2, $d1)
+    $v1 = Select-AgentCredentialResolver -Reference $ref -Descriptors $fwd
+    $v2 = Select-AgentCredentialResolver -Reference $ref -Descriptors $rev
+    Assert-True ($v1.status -eq $v2.status -and $v1.status -eq 'ambiguous') "v1=$($v1.status) v2=$($v2.status)"
 }
 
 $failures = @($script:results | Where-Object { -not $_.ok })

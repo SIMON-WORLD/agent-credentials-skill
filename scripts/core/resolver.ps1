@@ -15,6 +15,41 @@
   function here depends on a filesystem path, a specific provider, or a PowerShell-only mechanism.
 #>
 
+$script:acsRepoRoot = Split-Path -Path (Split-Path -Path $PSScriptRoot -Parent) -Parent
+$script:acsAllowedReasonCodes = $null
+
+function Get-AgentCredentialResolverAllowedReasonCodes {
+    <#
+    .SYNOPSIS
+      Returns the allowed resolver reason-code vocabulary for sanitization.
+    .DESCRIPTION
+      The v0.2 diagnostic failure codes plus the single resolver-specific RESOLVER_ERROR. Loaded
+      once from schema/diagnostic-codes.json (and cached) so the binding never accepts arbitrary
+      resolver-supplied reason codes. If the registry cannot be read, a fixed fallback list is used.
+      This is a reference-binding concern, not the pure matcher; it performs no credential access.
+    #>
+    if ($null -ne $script:acsAllowedReasonCodes) { return $script:acsAllowedReasonCodes }
+    $fallback = @(
+        'CREDENTIAL_NOT_FOUND','CREDENTIAL_INVALID','CREDENTIAL_SOURCE_UNAVAILABLE',
+        'SANDBOX_KEYRING_UNAVAILABLE','ENV_NOT_PROPAGATED','NETWORK_BLOCKED','DNS_FAILURE',
+        'PROXY_MISCONFIGURED','TOOL_NOT_INSTALLED','TOOL_EXECUTION_UNAVAILABLE',
+        'WRONG_ACCOUNT','WRONG_HOST','WRONG_PROFILE','TOKEN_SCOPE_INSUFFICIENT',
+        'AUTH_CHECK_TIMEOUT','DIAGNOSIS_INCONCLUSIVE','RESOLVER_ERROR'
+    )
+    $reg = Join-Path $script:acsRepoRoot 'schema\diagnostic-codes.json'
+    if (Test-Path -LiteralPath $reg) {
+        try {
+            $r = Get-Content -Raw -LiteralPath $reg | ConvertFrom-Json
+            $script:acsAllowedReasonCodes = @($r.codes.failure.PSObject.Properties.Name) + @('RESOLVER_ERROR')
+        } catch {
+            $script:acsAllowedReasonCodes = $fallback
+        }
+    } else {
+        $script:acsAllowedReasonCodes = $fallback
+    }
+    return $script:acsAllowedReasonCodes
+}
+
 function Get-AgentCredentialResolverField {
     <#
     .SYNOPSIS
@@ -51,6 +86,10 @@ function Test-AgentCredentialResolverEligible {
     if ($null -eq $Descriptor) { return $false }
     $resolverId = [string](Get-AgentCredentialResolverField $Descriptor 'resolverId')
     if ([string]::IsNullOrEmpty($resolverId)) { return $false }
+    # Contract gate: a descriptor must be a v0.5 descriptor and declare the resolve capability.
+    if ([string](Get-AgentCredentialResolverField $Descriptor 'contractVersion') -ne '0.5.0') { return $false }
+    $capabilities = @(Get-AgentCredentialResolverField $Descriptor 'capabilities')
+    if ($capabilities -notcontains 'resolve') { return $false }
 
     $refSourceType = [string](Get-AgentCredentialResolverField $Reference 'sourceType')
     if ([string]::IsNullOrEmpty($refSourceType)) { return $false }
@@ -58,6 +97,8 @@ function Test-AgentCredentialResolverEligible {
     # sourceType: must be explicitly declared.
     $sourceTypes = @(Get-AgentCredentialResolverField $Descriptor 'supportedSourceTypes')
     if ($sourceTypes.Count -eq 0) { return $false }
+    $validSourceTypes = @('env','file','keyring','connector','cli','broker','profile','config','other')
+    foreach ($st in $sourceTypes) { if ($validSourceTypes -notcontains [string]$st) { return $false } }
     if ($sourceTypes -notcontains $refSourceType) { return $false }
 
     # provider: empty supportedProviders = provider-agnostic (no constraint); otherwise must contain.
@@ -126,17 +167,45 @@ function Select-AgentCredentialResolver {
     }
 
     $descriptors = @($Descriptors | Where-Object { $null -ne $_ })
-    $eligibleIds = @()
+
+    # --- duplicate resolverId fails closed (array order must never decide) ---
+    $idCount = @{}
     foreach ($d in $descriptors) {
-        if (Test-AgentCredentialResolverEligible -Reference $Reference -Descriptor $d) {
-            $eligibleIds += [string](Get-AgentCredentialResolverField $d 'resolverId')
+        $id = [string](Get-AgentCredentialResolverField $d 'resolverId')
+        if ([string]::IsNullOrEmpty($id)) { $id = '' }
+        if ($idCount.ContainsKey($id)) { $idCount[$id] = $idCount[$id] + 1 } else { $idCount[$id] = 1 }
+    }
+    foreach ($key in $idCount.Keys) {
+        if ($idCount[$key] -gt 1) {
+            return [PSCustomObject]@{
+                status     = 'ambiguous'
+                resolver   = $null
+                reasonCode = 'RESOLVER_ERROR'
+                summary    = 'duplicate resolverId; resolver selection is ambiguous'
+            }
         }
     }
 
-    # Explicit requested resolver: honor it when eligible; fail closed otherwise. No substitution.
+    # --- track the actual eligible descriptor objects (no id -> reverse lookup) ---
+    $eligible = @()
+    foreach ($d in $descriptors) {
+        if (Test-AgentCredentialResolverEligible -Reference $Reference -Descriptor $d) {
+            $eligible += $d
+        }
+    }
+
+    # --- explicit requested resolver: exactly one descriptor of that id, and it must be eligible ---
     if (-not [string]::IsNullOrEmpty($RequestedId)) {
-        $requested = $descriptors | Where-Object { ([string](Get-AgentCredentialResolverField $_ 'resolverId')) -eq $RequestedId } | Select-Object -First 1
-        if ($null -eq $requested -or -not (Test-AgentCredentialResolverEligible -Reference $Reference -Descriptor $requested)) {
+        $requestedCandidates = @($descriptors | Where-Object { ([string](Get-AgentCredentialResolverField $_ 'resolverId')) -eq $RequestedId })
+        if ($requestedCandidates.Count -ne 1) {
+            return [PSCustomObject]@{
+                status     = 'requested_incompatible'
+                resolver   = $null
+                reasonCode = 'RESOLVER_ERROR'
+                summary    = 'explicit resolver is incompatible or unavailable'
+            }
+        }
+        if (-not (Test-AgentCredentialResolverEligible -Reference $Reference -Descriptor $requestedCandidates[0])) {
             return [PSCustomObject]@{
                 status     = 'requested_incompatible'
                 resolver   = $null
@@ -146,15 +215,14 @@ function Select-AgentCredentialResolver {
         }
         return [PSCustomObject]@{
             status     = 'matched'
-            resolver   = $requested
+            resolver   = $requestedCandidates[0]
             reasonCode = $null
             summary    = ('selected resolver ' + $RequestedId)
         }
     }
 
-    if ($eligibleIds.Count -eq 0) {
-        # Distinguish unsupported source type (a source type no resolver declares) from generic
-        # resolver mismatch. Both fail closed; the reasonCode is sanitized.
+    # --- non-requested path: exactly one eligible, else fail closed ---
+    if ($eligible.Count -eq 0) {
         $allSourceTypes = @()
         foreach ($d in $descriptors) {
             $allSourceTypes += @(Get-AgentCredentialResolverField $d 'supportedSourceTypes')
@@ -168,7 +236,7 @@ function Select-AgentCredentialResolver {
         }
     }
 
-    if ($eligibleIds.Count -gt 1) {
+    if ($eligible.Count -gt 1) {
         return [PSCustomObject]@{
             status     = 'ambiguous'
             resolver   = $null
@@ -177,12 +245,13 @@ function Select-AgentCredentialResolver {
         }
     }
 
-    $selected = $descriptors | Where-Object { ([string](Get-AgentCredentialResolverField $_ 'resolverId')) -eq $eligibleIds[0] } | Select-Object -First 1
+    $selected = $eligible[0]
+    $selectedId = [string](Get-AgentCredentialResolverField $selected 'resolverId')
     return [PSCustomObject]@{
         status     = 'matched'
         resolver   = $selected
         reasonCode = $null
-        summary    = ('selected resolver ' + $eligibleIds[0])
+        summary    = ('selected resolver ' + $selectedId)
     }
 }
 
@@ -283,29 +352,54 @@ function Resolve-AgentCredentialReference {
         }
     }
 
-    # Typed resolver outcome object (e.g. set by an adapter to signal a specific failure).
+    # Typed resolver outcome object: only `outcome` and `reasonCode` are read, for validation.
+    # summary/target/materialKind/lifetimeSeconds from the callback are never trusted or propagated.
     $typed = $raw.PSObject.Properties['outcome']
     if ($null -ne $typed -and $null -ne $raw) {
-        $typedOutcome = [string]($raw.outcome)
+        $typedOutcome = [string]$raw.outcome
         $typedReason = [string](Get-AgentCredentialResolverField $raw 'reasonCode')
-        $typedKind = [string](Get-AgentCredentialResolverField $raw 'materialKind')
-        $typedTarget = Get-AgentCredentialResolverField $raw 'target'
-        $typedLife = Get-AgentCredentialResolverField $raw 'lifetimeSeconds'
-        $typedSummary = [string](Get-AgentCredentialResolverField $raw 'summary')
-        if ([string]::IsNullOrEmpty($typedOutcome)) { $typedOutcome = 'failed' }
-        if ([string]::IsNullOrEmpty($typedKind)) { $typedKind = 'value' }
-        if ($typedOutcome -eq 'resolved' -and [string]::IsNullOrEmpty($typedTarget)) { $typedTarget = $EnvironmentVariable }
-        if ($null -eq $typedLife) { $typedLife = $(if ($typedOutcome -eq 'resolved') { $LifetimeSeconds } else { $null }) }
+        $allowedReasonCodes = Get-AgentCredentialResolverAllowedReasonCodes
+        $reasonCode = $null
+        if (-not [string]::IsNullOrEmpty($typedReason)) {
+            if ($allowedReasonCodes -contains $typedReason) { $reasonCode = $typedReason }
+            else { $reasonCode = 'RESOLVER_ERROR' }
+        }
+        if ($typedOutcome -notin @('resolved','unavailable','failed')) {
+            return [PSCustomObject]@{
+                contractVersion = '0.5.0'
+                resolverId      = $ResolverId
+                provider        = $Provider
+                outcome         = 'failed'
+                reasonCode      = 'RESOLVER_ERROR'
+                materialKind    = 'value'
+                target          = $null
+                lifetimeSeconds = $null
+                summary         = 'resolver returned an invalid typed outcome'
+            }
+        }
+        if ($typedOutcome -eq 'resolved') {
+            return [PSCustomObject]@{
+                contractVersion = '0.5.0'
+                resolverId      = $ResolverId
+                provider        = $Provider
+                outcome         = 'resolved'
+                reasonCode      = $null
+                materialKind    = 'value'
+                target          = $(if ($null -eq $EnvironmentVariable) { $null } else { [string]$EnvironmentVariable })
+                lifetimeSeconds = $LifetimeSeconds
+                summary         = 'resolver produced material'
+            }
+        }
         return [PSCustomObject]@{
             contractVersion = '0.5.0'
             resolverId      = $ResolverId
             provider        = $Provider
             outcome         = $typedOutcome
-            reasonCode      = $(if ([string]::IsNullOrEmpty($typedReason)) { $null } else { $typedReason })
-            materialKind    = $typedKind
-            target          = $(if ($null -eq $typedTarget) { $null } else { [string]$typedTarget })
-            lifetimeSeconds = $typedLife
-            summary         = $(if ([string]::IsNullOrEmpty($typedSummary)) { 'resolver produced outcome' } else { $typedSummary })
+            reasonCode      = $(if ($null -eq $reasonCode) { 'RESOLVER_ERROR' } else { $reasonCode })
+            materialKind    = 'value'
+            target          = $null
+            lifetimeSeconds = $null
+            summary         = 'resolver did not produce material'
         }
     }
 
